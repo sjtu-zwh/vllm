@@ -56,6 +56,8 @@ from benchmark_dataset import (AIMODataset, BurstGPTDataset,
                                VisionArenaDataset)
 from benchmark_utils import convert_to_pytorch_benchmark_format, write_to_json
 
+from trace import Trace
+
 MILLISECONDS_TO_SECONDS_CONVERSION = 1000
 
 
@@ -131,7 +133,6 @@ async def get_request(
         interval = np.random.gamma(shape=burstiness, scale=theta)
         # The next request will be sent after the interval.
         await asyncio.sleep(interval)
-
 
 def calculate_metrics(
     input_requests: list[SampleRequest],
