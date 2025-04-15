@@ -32,7 +32,7 @@ class KVCacheManager:
             "KVCacheManager does not support hybrid models with more than 1 "
             "kv cache group")
         kv_cache_spec = kv_cache_config.kv_cache_groups[0].kv_cache_spec
-        self.block_size = kv_cache_spec.block_size
+        self.block_size = kv_cache_spec.block_size # 一个block中包括几个token
         self.num_gpu_blocks = kv_cache_config.num_blocks
         self.max_model_len = max_model_len
         self.max_num_blocks_per_req = cdiv(max_model_len, self.block_size)

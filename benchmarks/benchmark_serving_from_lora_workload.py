@@ -596,8 +596,12 @@ async def benchmark_from_lora_workload(
         async with semaphore:
             return await request_func(request_func_input=request_func_input,
                                       pbar=pbar)
-        
-    lora_modules_list = list(lora_modules)
+    
+    if lora_modules is not None:
+        lora_modules_list = list(lora_modules)
+        lora_modules_cnt = len(lora_modules_list)
+    else:
+        lora_modules_cnt = 0
 
     benchmark_start_time = time.perf_counter()
     tasks: list[asyncio.Task] = []
@@ -605,7 +609,10 @@ async def benchmark_from_lora_workload(
         prompt, prompt_len, output_len, mm_content = request.prompt, \
             request.prompt_len, request.expected_output_len, \
                 request.multi_modal_data
-        req_model_id, req_model_name = lora_model_id, lora_modules_list[lora_model_id]
+        if lora_modules_cnt > 0:
+            req_model_id, req_model_name = lora_model_id, lora_modules_list[lora_model_id]
+        else:
+            req_model_id, req_model_name = model_id, model_name
 
         request_func_input = RequestFuncInput(model=req_model_id,
                                               model_name=req_model_name,
@@ -904,10 +911,14 @@ def main(args: argparse.Namespace):
             raise ValueError(f"Unknown dataset: {args.dataset_name}") from err
     goodput_config_dict = check_goodput_args(args)
 
-
-    num_lora_models = len(list(args.lora_modules))
+    if args.lora_modules is not None:
+        num_lora_models = len(list(args.lora_modules))
+    else:
+        num_lora_models = 0
+    num_models = num_lora_models if num_lora_models > 0 else 1
+    
     maf_trace = Trace(args.trace_name, args.trace_path, args.start_time, args.end_time, args.need_sort)
-    workload = maf_trace.replay_to_workload(num_lora_models, args.num_prompts, tot_rate=args.request_rate, cv=args.cv, interval_minutes=args.interval, map_stride=args.map_stride)
+    workload = maf_trace.replay_to_workload(num_models, args.num_prompts, tot_rate=args.request_rate, cv=args.cv, interval_minutes=args.interval, map_stride=args.map_stride)
 
     # Avoid GC processing "static" data - reduce pause times.
     gc.collect()
