@@ -31,7 +31,7 @@ import warnings
 from collections.abc import AsyncGenerator, Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, List, Tuple
 
 import numpy as np
 from backend_request_func import (ASYNC_REQUEST_FUNCS, RequestFuncInput,
@@ -55,6 +55,8 @@ from benchmark_dataset import (AIMODataset, BurstGPTDataset,
                                SampleRequest, ShareGPTDataset, SonnetDataset,
                                VisionArenaDataset)
 from benchmark_utils import convert_to_pytorch_benchmark_format, write_to_json
+
+from vllm.trace import Trace
 
 MILLISECONDS_TO_SECONDS_CONVERSION = 1000
 
@@ -132,6 +134,27 @@ async def get_request(
         # The next request will be sent after the interval.
         await asyncio.sleep(interval)
 
+async def get_request_from_workload(
+    input_requests: list[SampleRequest],
+    workload: List[Tuple[int, float]]
+) -> AsyncGenerator[Tuple[int, SampleRequest], None]:
+    """
+    Asynchronously generates requests based on a workload.
+
+    Args:
+        input_requests:
+            A list of input requests, each represented as a SampleRequest.
+        workload:
+            A list of tuples, where each tuple contains an index and a
+            corresponding request rate (requests/s).
+    """
+    input_requests: Iterable[SampleRequest] = iter(input_requests)
+    idx = 0
+    for request in input_requests:
+        model_id, interval = workload[idx]
+        yield model_id, request
+        idx += 1
+        await asyncio.sleep(interval)
 
 def calculate_metrics(
     input_requests: list[SampleRequest],
@@ -476,6 +499,235 @@ async def benchmark(
 
     return result
 
+async def benchmark_from_lora_workload(
+    backend: str,
+    api_url: str,
+    base_url: str,
+    model_id: str,
+    model_name: str,
+    tokenizer: PreTrainedTokenizerBase,
+    input_requests: list[SampleRequest],
+    logprobs: Optional[int],
+    request_rate: float,
+    burstiness: float,
+    disable_tqdm: bool,
+    profile: bool,
+    selected_percentile_metrics: list[str],
+    selected_percentiles: list[float],
+    ignore_eos: bool,
+    goodput_config_dict: dict[str, float],
+    max_concurrency: Optional[int],
+    lora_modules: Optional[Iterable[str]],
+    workload: List[Tuple[int, float]],
+):
+    if backend in ASYNC_REQUEST_FUNCS:
+        request_func = ASYNC_REQUEST_FUNCS[backend]
+    else:
+        raise ValueError(f"Unknown backend: {backend}")
+
+    print("Starting initial single prompt test run...")
+    test_prompt, test_prompt_len, test_output_len, test_mm_content = \
+        input_requests[0].prompt, input_requests[0].prompt_len, \
+        input_requests[0].expected_output_len, \
+            input_requests[0].multi_modal_data
+
+    if backend != "openai-chat" and test_mm_content is not None:
+        # multi-modal benchmark is only available on OpenAI Chat backend.
+        raise ValueError(
+            "Multi-modal content is only supported on 'openai-chat' backend.")
+    assert test_mm_content is None or isinstance(test_mm_content, dict)
+    test_input = RequestFuncInput(
+        model=model_id,
+        model_name=model_name,
+        prompt=test_prompt,
+        api_url=api_url,
+        prompt_len=test_prompt_len,
+        output_len=test_output_len,
+        logprobs=logprobs,
+        multi_modal_content=test_mm_content,
+        ignore_eos=ignore_eos,
+    )
+
+    test_output = await request_func(request_func_input=test_input)
+    if not test_output.success:
+        raise ValueError(
+            "Initial test run failed - Please make sure benchmark arguments "
+            f"are correctly specified. Error: {test_output.error}")
+    else:
+        print("Initial test run completed. Starting main benchmark run...")
+
+    if profile:
+        print("Starting profiler...")
+        profile_input = RequestFuncInput(model=model_id,
+                                         model_name=model_name,
+                                         prompt=test_prompt,
+                                         api_url=base_url + "/start_profile",
+                                         prompt_len=test_prompt_len,
+                                         output_len=test_output_len,
+                                         logprobs=logprobs,
+                                         multi_modal_content=test_mm_content,
+                                         ignore_eos=ignore_eos)
+        profile_output = await request_func(request_func_input=profile_input)
+        if profile_output.success:
+            print("Profiler started")
+
+    if burstiness == 1.0:
+        distribution = "Poisson process"
+    else:
+        distribution = "Gamma distribution"
+
+    print(f"Traffic request rate: {request_rate}")
+    print(f"Burstiness factor: {args.cv} ({distribution})")
+    print(f"Maximum request concurrency: {max_concurrency}")
+
+    pbar = None if disable_tqdm else tqdm(total=len(input_requests))
+
+    # This can be used once the minimum Python version is 3.10 or higher,
+    # and it will simplify the code in limited_request_func.
+    #    semaphore = (asyncio.Semaphore(max_concurrency)
+    #                 if max_concurrency else contextlib.nullcontext())
+    semaphore = (asyncio.Semaphore(max_concurrency)
+                 if max_concurrency else None)
+
+    async def limited_request_func(request_func_input, pbar):
+        if semaphore is None:
+            return await request_func(request_func_input=request_func_input,
+                                      pbar=pbar)
+        async with semaphore:
+            return await request_func(request_func_input=request_func_input,
+                                      pbar=pbar)
+        
+    lora_modules_list = list(lora_modules)
+
+    benchmark_start_time = time.perf_counter()
+    tasks: list[asyncio.Task] = []
+    async for lora_model_id, request in get_request_from_workload(input_requests, workload):
+        prompt, prompt_len, output_len, mm_content = request.prompt, \
+            request.prompt_len, request.expected_output_len, \
+                request.multi_modal_data
+        req_model_id, req_model_name = lora_model_id, lora_modules_list[lora_model_id]
+
+        request_func_input = RequestFuncInput(model=req_model_id,
+                                              model_name=req_model_name,
+                                              prompt=prompt,
+                                              api_url=api_url,
+                                              prompt_len=prompt_len,
+                                              output_len=output_len,
+                                              logprobs=logprobs,
+                                              multi_modal_content=mm_content,
+                                              ignore_eos=ignore_eos)
+        tasks.append(
+            asyncio.create_task(
+                limited_request_func(request_func_input=request_func_input,
+                                     pbar=pbar)))
+    outputs: list[RequestFuncOutput] = await asyncio.gather(*tasks)
+
+    if profile:
+        print("Stopping profiler...")
+        profile_input = RequestFuncInput(
+            model=model_id,
+            prompt=test_prompt,
+            api_url=base_url + "/stop_profile",
+            prompt_len=test_prompt_len,
+            output_len=test_output_len,
+            logprobs=logprobs,
+        )
+        profile_output = await request_func(request_func_input=profile_input)
+        if profile_output.success:
+            print("Profiler stopped")
+
+    if pbar is not None:
+        pbar.close()
+
+    benchmark_duration = time.perf_counter() - benchmark_start_time
+
+    metrics, actual_output_lens = calculate_metrics(
+        input_requests=input_requests,
+        outputs=outputs,
+        dur_s=benchmark_duration,
+        tokenizer=tokenizer,
+        selected_percentile_metrics=selected_percentile_metrics,
+        selected_percentiles=selected_percentiles,
+        goodput_config_dict=goodput_config_dict,
+    )
+
+    print("{s:{c}^{n}}".format(s=' Serving Benchmark Result ', n=50, c='='))
+    print("{:<40} {:<10}".format("Successful requests:", metrics.completed))
+    print("{:<40} {:<10.2f}".format("Benchmark duration (s):",
+                                    benchmark_duration))
+    print("{:<40} {:<10}".format("Total input tokens:", metrics.total_input))
+    print("{:<40} {:<10}".format("Total generated tokens:",
+                                 metrics.total_output))
+    print("{:<40} {:<10.2f}".format("Request throughput (req/s):",
+                                    metrics.request_throughput))
+    if goodput_config_dict:
+        print("{:<40} {:<10.2f}".format("Request goodput (req/s):",
+                                        metrics.request_goodput))
+    print("{:<40} {:<10.2f}".format("Output token throughput (tok/s):",
+                                    metrics.output_throughput))
+    print("{:<40} {:<10.2f}".format("Total Token throughput (tok/s):",
+                                    metrics.total_token_throughput))
+
+    result = {
+        "duration": benchmark_duration,
+        "completed": metrics.completed,
+        "total_input_tokens": metrics.total_input,
+        "total_output_tokens": metrics.total_output,
+        "request_throughput": metrics.request_throughput,
+        "request_goodput:":
+        metrics.request_goodput if goodput_config_dict else None,
+        "output_throughput": metrics.output_throughput,
+        "total_token_throughput": metrics.total_token_throughput,
+        "input_lens": [output.prompt_len for output in outputs],
+        "output_lens": actual_output_lens,
+        "ttfts": [output.ttft for output in outputs],
+        "itls": [output.itl for output in outputs],
+        "generated_texts": [output.generated_text for output in outputs],
+        "errors": [output.error for output in outputs],
+    }
+
+    def process_one_metric(
+        # E.g., "ttft"
+        metric_attribute_name: str,
+        # E.g., "TTFT"
+        metric_name: str,
+        # E.g., "Time to First Token"
+        metric_header: str,
+    ):
+        # This function prints and adds statistics of the specified
+        # metric.
+        if metric_attribute_name not in selected_percentile_metrics:
+            return
+        print("{s:{c}^{n}}".format(s=metric_header, n=50, c='-'))
+        print("{:<40} {:<10.2f}".format(
+            f"Mean {metric_name} (ms):",
+            getattr(metrics, f"mean_{metric_attribute_name}_ms")))
+        print("{:<40} {:<10.2f}".format(
+            f"Median {metric_name} (ms):",
+            getattr(metrics, f"median_{metric_attribute_name}_ms")))
+        result[f"mean_{metric_attribute_name}_ms"] = getattr(
+            metrics, f"mean_{metric_attribute_name}_ms")
+        result[f"median_{metric_attribute_name}_ms"] = getattr(
+            metrics, f"median_{metric_attribute_name}_ms")
+        result[f"std_{metric_attribute_name}_ms"] = getattr(
+            metrics, f"std_{metric_attribute_name}_ms")
+        for p, value in getattr(metrics,
+                                f"percentiles_{metric_attribute_name}_ms"):
+            p_word = str(int(p)) if int(p) == p else str(p)
+            print("{:<40} {:<10.2f}".format(f"P{p_word} {metric_name} (ms):",
+                                            value))
+            result[f"p{p_word}_{metric_attribute_name}_ms"] = value
+
+    process_one_metric("ttft", "TTFT", "Time to First Token")
+    process_one_metric("tpot", "TPOT",
+                       "Time per Output Token (excl. 1st token)")
+    process_one_metric("itl", "ITL", "Inter-token Latency")
+    process_one_metric("e2el", "E2EL", "End-to-end Latency")
+
+    print("=" * 50)
+
+    return result
+
 
 def check_goodput_args(args):
     # Check and parse goodput arguments
@@ -652,12 +904,17 @@ def main(args: argparse.Namespace):
             raise ValueError(f"Unknown dataset: {args.dataset_name}") from err
     goodput_config_dict = check_goodput_args(args)
 
+
+    num_lora_models = len(list(args.lora_modules))
+    maf_trace = Trace(args.trace_name, args.trace_path, args.start_time, args.end_time, args.need_sort)
+    workload = maf_trace.replay_to_workload(num_lora_models, args.num_prompts, tot_rate=args.request_rate, cv=args.cv, interval_minutes=args.interval, map_stride=args.map_stride)
+
     # Avoid GC processing "static" data - reduce pause times.
     gc.collect()
     gc.freeze()
 
     benchmark_result = asyncio.run(
-        benchmark(
+        benchmark_from_lora_workload(
             backend=backend,
             api_url=api_url,
             base_url=base_url,
@@ -678,6 +935,7 @@ def main(args: argparse.Namespace):
             goodput_config_dict=goodput_config_dict,
             max_concurrency=args.max_concurrency,
             lora_modules=args.lora_modules,
+            workload=workload,
         ))
 
     # Save config and results to json
@@ -821,6 +1079,65 @@ if __name__ == "__main__":
         "then all the requests are sent at time 0. "
         "Otherwise, we use Poisson process or gamma distribution "
         "to synthesize the request arrival times.",
+    )
+    parser.add_argument(
+        "--cv",
+        type=float,
+        default=1,
+        help="Coefficient of variation of the request generation. "
+    )
+    parser.add_argument(
+        "--trace-name",
+        type=str,
+        default='azure_v2',
+        help="Name of the trace to use for the request generation. "
+    )
+    parser.add_argument(
+        "--trace-path",
+        type=str,
+        default="~/maf2/",
+        help="Path to the trace file for the request generation. "
+    )
+    parser.add_argument(
+        '--start-time', 
+        type=str, 
+        default='0.0.0', 
+        help="Start time of the trace file. "
+    )
+    parser.add_argument(
+        '--end-time', 
+        type=str, 
+        default='0.0.60', 
+        help="End time of the trace file. "
+    )
+    parser.add_argument(
+        "--interval", 
+        type=int, 
+        default=60, 
+        help="Interval of the trace file. "
+    )
+    parser.add_argument(
+        '--need-sort', 
+        action='store_true', 
+        help="Whether to sort the trace file. "
+    )
+    parser.add_argument(
+        '--map-stride', 
+        type=int, 
+        default=1, 
+        help="Stride of the model map"
+    )
+    parser.add_argument(
+        '--len-ratio', 
+        type=float, 
+        default=1.0, 
+        help="Length ratio of the sequence length. "
+    )
+    parser.add_argument(
+        '--max-len', 
+        type=int, 
+        default=2048, 
+        help="Maximum length of the sequence. "
     )
     parser.add_argument(
         "--burstiness",
