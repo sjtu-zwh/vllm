@@ -1913,6 +1913,9 @@ class LLMEngine:
 
     def list_loras(self) -> Set[int]:
         return self.model_executor.list_loras()
+    
+    def list_loras_ranks(self) -> Dict[int, int]:
+        return self.model_executor.list_loras_ranks()
 
     def pin_lora(self, lora_id: int) -> bool:
         return self.model_executor.pin_lora(lora_id)

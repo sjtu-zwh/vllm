@@ -1403,6 +1403,11 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
         if not self.lora_manager:
             raise RuntimeError("LoRA is not enabled.")
         return self.lora_manager.list_adapters()
+    
+    def list_loras_ranks(self) -> Dict[int, int]:
+        if not self.lora_manager:
+            raise RuntimeError("LoRA is not enabled.")
+        return self.lora_manager.list_adapters_ranks()
 
     def remove_all_prompt_adapters(self):
         if not self.prompt_adapter_manager:

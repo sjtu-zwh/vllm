@@ -289,6 +289,9 @@ class CPUWorker(LocalOrDistributedWorkerBase):
 
     def list_loras(self) -> Set[int]:
         return self.model_runner.list_loras()
+    
+    def list_loras_ranks(self) -> dict[int, int]:
+        return self.model_runner.list_loras_ranks()
 
     def _validate_num_cpu_blocks(self, num_cpu_blocks: int) -> None:
         """Raise errors if the num_cpu_blocks is invalid.

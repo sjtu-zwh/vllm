@@ -162,6 +162,12 @@ class ExecutorBase(ABC):
         for s in sets:
             assert s == sets[0], "All workers should have the same LORAs."
         return sets[0]
+    
+    def list_loras_ranks(self) -> Dict[int, int]:
+        sets = self.collective_rpc("list_loras_ranks")
+        for s in sets:
+            assert s == sets[0], "All workers should have the same LORAs."
+        return sets[0]
 
     def add_prompt_adapter(
             self, prompt_adapter_request: PromptAdapterRequest) -> bool:

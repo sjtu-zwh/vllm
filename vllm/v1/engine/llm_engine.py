@@ -278,6 +278,10 @@ class LLMEngine:
     def list_loras(self) -> set[int]:
         """List all registered adapters."""
         return self.engine_core.list_loras()
+    
+    def list_loras_ranks(self) -> dict[int, int]:
+        """List all registered adapters."""
+        return self.engine_core.list_loras_ranks()
 
     def pin_lora(self, lora_id: int) -> bool:
         """Prevent an adapter from being evicted."""

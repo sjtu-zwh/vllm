@@ -610,7 +610,7 @@ async def benchmark_from_lora_workload(
             request.prompt_len, request.expected_output_len, \
                 request.multi_modal_data
         if lora_modules_cnt > 0:
-            req_model_id, req_model_name = lora_model_id, lora_modules_list[lora_model_id]
+            req_model_id, req_model_name = lora_model_id + 1, lora_modules_list[lora_model_id]
         else:
             req_model_id, req_model_name = model_id, model_name
 
@@ -916,7 +916,7 @@ def main(args: argparse.Namespace):
     else:
         num_lora_models = 0
     num_models = num_lora_models if num_lora_models > 0 else 1
-    
+
     maf_trace = Trace(args.trace_name, args.trace_path, args.start_time, args.end_time, args.need_sort)
     workload = maf_trace.replay_to_workload(num_models, args.num_prompts, tot_rate=args.request_rate, cv=args.cv, interval_minutes=args.interval, map_stride=args.map_stride)
 

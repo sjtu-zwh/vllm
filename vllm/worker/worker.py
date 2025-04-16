@@ -463,6 +463,9 @@ class Worker(LocalOrDistributedWorkerBase):
     def list_loras(self) -> Set[int]:
         return self.model_runner.list_loras()
 
+    def list_loras_ranks(self) -> Dict[int, int]:
+        return self.model_runner.list_loras_ranks()
+
     def add_prompt_adapter(
             self, prompt_adapter_request: PromptAdapterRequest) -> bool:
         return self.model_runner.add_prompt_adapter(prompt_adapter_request)

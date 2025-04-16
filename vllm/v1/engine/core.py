@@ -9,6 +9,7 @@ from concurrent.futures import Future
 from inspect import isclass, signature
 from logging import DEBUG
 from typing import Any, Callable, Optional, TypeVar, Union
+from collections import OrderedDict
 
 import msgspec
 import psutil
@@ -120,6 +121,11 @@ class EngineCore:
                         self.batch_queue_size)
             self.batch_queue = queue.Queue(self.batch_queue_size)
 
+        self.request_idx = 0
+        self.request_idx_dict: OrderedDict[str, int] = OrderedDict()
+        self.request_lora_id_dict: OrderedDict[str, int] = OrderedDict()
+        self.lora_model_rank_dict: OrderedDict[int, int] = OrderedDict()
+
     def _initialize_kv_caches(
             self, vllm_config: VllmConfig) -> tuple[int, int, KVCacheConfig]:
         start = time.time()
@@ -181,6 +187,13 @@ class EngineCore:
             # Start grammar compilation asynchronously
             self.structured_output_manager.grammar_init(req)
 
+        if self.request_idx_dict.get(req.request_id) is None:
+            # If this is a new request, add it to the request index
+            self.request_idx_dict[req.request_id] = self.request_idx
+            self.request_lora_id_dict[req.request_id] = req.lora_request.lora_int_id if req.lora_request is not None else 0
+            self.request_idx += 1
+            self.update_loras_ranks()
+
         self.scheduler.add_request(req)
 
     def abort_requests(self, request_ids: list[str]):
@@ -197,6 +210,7 @@ class EngineCore:
 
         # Check for any requests remaining in the scheduler - unfinished,
         # or finished and not yet removed from the batch.
+        iter_begin_time = time.perf_counter_ns()
         if not self.scheduler.has_requests():
             return EngineCoreOutputs(
                 outputs=[],
@@ -206,6 +220,13 @@ class EngineCore:
         output = self.model_executor.execute_model(scheduler_output)
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, output)  # type: ignore
+        
+        print("current iteration:")
+        for req in scheduler_output.scheduled_new_reqs:
+            print(f"new request id: {self.request_idx_dict[req.req_id]}, lora id: {self.request_lora_id_dict[req.req_id]}, lora rank: {self.lora_model_rank_dict[self.request_lora_id_dict[req.req_id]]}")
+        for req in scheduler_output.scheduled_cached_reqs:
+            print(f"cached request id: {self.request_idx_dict[req.req_id]}, lora id: {self.request_lora_id_dict[req.req_id]}, lora rank: {self.lora_model_rank_dict[self.request_lora_id_dict[req.req_id]]}")    
+        print(f"iter time: {float(time.perf_counter_ns() - iter_begin_time)/1e6} ms")
 
         return engine_core_outputs
 
@@ -275,15 +296,22 @@ class EngineCore:
 
     def add_lora(self, lora_request: LoRARequest) -> bool:
         return self.model_executor.add_lora(lora_request)
-
+        
     def remove_lora(self, lora_id: int) -> bool:
         return self.model_executor.remove_lora(lora_id)
 
     def list_loras(self) -> set[int]:
         return self.model_executor.list_loras()
+    
+    def list_loras_ranks(self) -> dict[int, int]:
+        return self.model_executor.list_loras_ranks()
 
     def pin_lora(self, lora_id: int) -> bool:
         return self.model_executor.pin_lora(lora_id)
+
+    def update_loras_ranks(self):
+        self.lora_model_rank_dict = self.list_loras_ranks().copy()
+        print("lora rank dict:", self.lora_model_rank_dict)
 
     def save_sharded_state(
         self,

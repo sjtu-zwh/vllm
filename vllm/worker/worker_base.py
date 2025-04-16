@@ -123,6 +123,9 @@ class WorkerBase:
 
     def list_loras(self) -> Set[int]:
         raise NotImplementedError
+    
+    def list_loras_ranks(self) -> Dict[int, int]:
+        raise NotImplementedError
 
     @property
     def vocab_size(self) -> int:
@@ -184,6 +187,9 @@ class DelegateWorkerBase(WorkerBase):
 
     def list_loras(self) -> Set[int]:
         return self.worker.list_loras()
+    
+    def list_loras_ranks(self) -> dict[int, int]:
+        return self.worker.list_loras_ranks()
 
     def __getattr__(self, attr):
         return getattr(self.worker, attr)
@@ -205,6 +211,9 @@ class LoRANotSupportedWorkerBase(WorkerBase):
             f"{type(self)} does not support LoRA")  # type: ignore
 
     def list_loras(self) -> Set[int]:
+        raise ValueError(f"{type(self)} does not support LoRA")
+    
+    def list_loras_ranks(self) -> dict[int, int]:
         raise ValueError(f"{type(self)} does not support LoRA")
 
 

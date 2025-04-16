@@ -576,6 +576,11 @@ class CPUModelRunnerBase(ModelRunnerBase[TModelInputForCPU]):
         if not self.lora_manager:
             raise RuntimeError("LoRA is not enabled.")
         return self.lora_manager.list_adapters()
+    
+    def list_loras_ranks(self) -> dict[int, int]:
+        if not self.lora_manager:
+            raise RuntimeError("LoRA is not enabled.")
+        return self.lora_manager.list_adapters_ranks()
 
 
 class CPUModelRunner(CPUModelRunnerBase[ModelInputForCPUWithSamplingMetadata]):

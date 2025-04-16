@@ -53,6 +53,8 @@ class WorkerLoRAManager(AbstractWorkerManager):
         super().__init__(device)
         # Lazily initialized by create_lora_manager.
         self._adapter_manager: LoRAModelManager
+        self.loras_ranks: Dict[int, int] = {}
+        self.loras_ranks[0] = 0
 
     @contextmanager
     def dummy_lora_cache(self):
@@ -187,6 +189,9 @@ class WorkerLoRAManager(AbstractWorkerManager):
     def list_adapters(self) -> Set[int]:
         return list_adapters_worker(self._adapter_manager.list_adapters)
 
+    def list_adapters_ranks(self) -> Dict[int, int]:
+        return self.loras_ranks
+
 
 class LRUCacheWorkerLoRAManager(WorkerLoRAManager):
     """WorkerLoRAManager that manages LoRA models on the worker side.
@@ -233,6 +238,7 @@ class LRUCacheWorkerLoRAManager(WorkerLoRAManager):
             # This may cause the # of loaded lora adapters to very temporarily
             # exceed `--max-cpu-loras`.
             lora = self._load_adapter(lora_request)
+            self.loras_ranks[lora_request.lora_int_id] = lora.rank
 
             # Loading succeeded, now check if we will exceed cache capacity and
             # evict if the oldest adapter if so

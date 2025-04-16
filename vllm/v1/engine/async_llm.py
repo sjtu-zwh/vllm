@@ -441,6 +441,10 @@ class AsyncLLM(EngineClient):
     async def list_loras(self) -> set[int]:
         """List all registered adapters."""
         return await self.engine_core.list_loras_async()
+    
+    async def list_loras_ranks(self) -> dict[int, int]:
+        """List all registered adapters ranks."""
+        return await self.engine_core.list_loras_ranks_async()
 
     async def pin_lora(self, lora_id: int) -> bool:
         """Prevent an adapter from being evicted."""
