@@ -125,6 +125,7 @@ class EngineCore:
         self.request_idx_dict: OrderedDict[str, int] = OrderedDict()
         self.request_lora_id_dict: OrderedDict[str, int] = OrderedDict()
         self.lora_model_rank_dict: OrderedDict[int, int] = OrderedDict()
+        self.lora_model_rank_dict[0] = 0
 
     def _initialize_kv_caches(
             self, vllm_config: VllmConfig) -> tuple[int, int, KVCacheConfig]:
@@ -221,12 +222,20 @@ class EngineCore:
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, output)  # type: ignore
         
-        print("current iteration:")
+        print(f"\033[93mnew iteration, token budget: {self.scheduler.get_token_budget()}\033[0m")
         for req in scheduler_output.scheduled_new_reqs:
-            print(f"new request id: {self.request_idx_dict[req.req_id]}, lora id: {self.request_lora_id_dict[req.req_id]}, lora rank: {self.lora_model_rank_dict[self.request_lora_id_dict[req.req_id]]}")
+            new_req_idx = self.request_idx_dict[req.req_id]
+            new_req_lora_id = self.request_lora_id_dict[req.req_id]
+            new_req_lora_rank = self.lora_model_rank_dict[new_req_lora_id]
+            new_req_scheduled_tokens = scheduler_output.num_scheduled_tokens[req.req_id]
+            print(f"new request id: {new_req_idx}, scheduled tokens: {new_req_scheduled_tokens}, lora id: {new_req_lora_id}, lora rank: {new_req_lora_rank}")
         for req in scheduler_output.scheduled_cached_reqs:
-            print(f"cached request id: {self.request_idx_dict[req.req_id]}, lora id: {self.request_lora_id_dict[req.req_id]}, lora rank: {self.lora_model_rank_dict[self.request_lora_id_dict[req.req_id]]}")    
-        print(f"iter time: {float(time.perf_counter_ns() - iter_begin_time)/1e6} ms")
+            cached_req_idx = self.request_idx_dict[req.req_id]
+            cached_req_lora_id = self.request_lora_id_dict[req.req_id]
+            cached_req_lora_rank = self.lora_model_rank_dict[cached_req_lora_id]
+            cached_req_scheduled_tokens = scheduler_output.num_scheduled_tokens[req.req_id]
+            print(f"cached request id: {cached_req_idx}, scheduled tokens: {cached_req_scheduled_tokens}, lora id: {cached_req_lora_id}, lora rank: {cached_req_lora_rank}")
+        print(f"iter computing time: {float(time.perf_counter_ns() - iter_begin_time)/1e6} ms")
 
         return engine_core_outputs
 
@@ -311,7 +320,7 @@ class EngineCore:
 
     def update_loras_ranks(self):
         self.lora_model_rank_dict = self.list_loras_ranks().copy()
-        print("lora rank dict:", self.lora_model_rank_dict)
+        print(f"lora model rank dict: {self.lora_model_rank_dict}")
 
     def save_sharded_state(
         self,

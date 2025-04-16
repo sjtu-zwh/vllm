@@ -757,3 +757,6 @@ class Scheduler(SchedulerInterface):
         spec_decoding_stats.observe(num_draft_tokens=num_draft_tokens,
                                     num_accepted_tokens=num_accepted_tokens)
         return spec_decoding_stats
+    
+    def get_token_budget(self) -> int:
+        return self.max_num_scheduled_tokens

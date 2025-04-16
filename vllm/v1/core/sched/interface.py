@@ -137,3 +137,8 @@ class SchedulerInterface(ABC):
         The SchedulerStats object is created for every scheduling step.
         """
         raise NotImplementedError
+    
+    @abstractmethod
+    def get_token_budget(self) -> Iterable[str]:
+        """Get the token budget in one iteration."""
+        raise NotImplementedError
