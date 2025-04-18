@@ -817,6 +817,16 @@ def main(args: argparse.Namespace):
     tokenizer = get_tokenizer(tokenizer_id,
                               tokenizer_mode=tokenizer_mode,
                               trust_remote_code=args.trust_remote_code)
+    
+    if args.lora_modules is not None:
+        num_lora_models = len(list(args.lora_modules))
+    else:
+        num_lora_models = 0
+    num_models = num_lora_models if num_lora_models > 0 else 1
+    maf_trace = Trace(args.trace_name, args.trace_path, args.start_time, args.end_time, args.need_sort)
+    workload = maf_trace.replay_to_workload(num_models, args.num_prompts, tot_rate=args.request_rate, cv=args.cv, interval_minutes=args.interval, map_stride=args.map_stride)
+    num_prompts = len(workload)
+    print(f"Total number of prompts: {num_prompts}")
 
     if args.dataset_name is None:
         raise ValueError(
@@ -827,7 +837,7 @@ def main(args: argparse.Namespace):
         dataset = SonnetDataset(dataset_path=args.dataset_path)
         # For the "sonnet" dataset, formatting depends on the backend.
         if args.backend == "openai-chat":
-            input_requests = dataset.sample(num_requests=args.num_prompts,
+            input_requests = dataset.sample(num_requests=num_prompts,
                                             input_len=args.sonnet_input_len,
                                             output_len=args.sonnet_output_len,
                                             prefix_len=args.sonnet_prefix_len,
@@ -836,7 +846,7 @@ def main(args: argparse.Namespace):
         else:
             assert tokenizer.chat_template or tokenizer.default_chat_template, (
                 "Tokenizer/model must have chat template for sonnet dataset.")
-            input_requests = dataset.sample(num_requests=args.num_prompts,
+            input_requests = dataset.sample(num_requests=num_prompts,
                                             input_len=args.sonnet_input_len,
                                             output_len=args.sonnet_output_len,
                                             prefix_len=args.sonnet_prefix_len,
@@ -875,7 +885,7 @@ def main(args: argparse.Namespace):
             dataset_split=args.hf_split,
             random_seed=args.seed,
         ).sample(
-            num_requests=args.num_prompts,
+            num_requests=num_prompts,
             tokenizer=tokenizer,
             output_len=args.hf_output_len,
         )
@@ -887,17 +897,17 @@ def main(args: argparse.Namespace):
             lambda: ShareGPTDataset(random_seed=args.seed,
                                     dataset_path=args.dataset_path).sample(
                                         tokenizer=tokenizer,
-                                        num_requests=args.num_prompts,
+                                        num_requests=num_prompts,
                                         output_len=args.sharegpt_output_len,
                                     ),
             "burstgpt":
             lambda: BurstGPTDataset(random_seed=args.seed,
                                     dataset_path=args.dataset_path).
-            sample(tokenizer=tokenizer, num_requests=args.num_prompts),
+            sample(tokenizer=tokenizer, num_requests=num_prompts),
             "random":
             lambda: RandomDataset(dataset_path=args.dataset_path).sample(
                 tokenizer=tokenizer,
-                num_requests=args.num_prompts,
+                num_requests=num_prompts,
                 prefix_len=args.random_prefix_len,
                 input_len=args.random_input_len,
                 output_len=args.random_output_len,
@@ -910,15 +920,6 @@ def main(args: argparse.Namespace):
         except KeyError as err:
             raise ValueError(f"Unknown dataset: {args.dataset_name}") from err
     goodput_config_dict = check_goodput_args(args)
-
-    if args.lora_modules is not None:
-        num_lora_models = len(list(args.lora_modules))
-    else:
-        num_lora_models = 0
-    num_models = num_lora_models if num_lora_models > 0 else 1
-
-    maf_trace = Trace(args.trace_name, args.trace_path, args.start_time, args.end_time, args.need_sort)
-    workload = maf_trace.replay_to_workload(num_models, args.num_prompts, tot_rate=args.request_rate, cv=args.cv, interval_minutes=args.interval, map_stride=args.map_stride)
 
     # Avoid GC processing "static" data - reduce pause times.
     gc.collect()
@@ -1069,7 +1070,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num-prompts",
         type=int,
-        default=1000,
+        default=1,
         help="Number of prompts to process.",
     )
     parser.add_argument(

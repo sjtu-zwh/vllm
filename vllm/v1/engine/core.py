@@ -10,6 +10,7 @@ from inspect import isclass, signature
 from logging import DEBUG
 from typing import Any, Callable, Optional, TypeVar, Union
 from collections import OrderedDict
+from datetime import datetime
 
 import msgspec
 import psutil
@@ -47,6 +48,12 @@ POLLING_TIMEOUT_S = 2.5
 
 _R = TypeVar('_R')  # Return type for collective_rpc
 
+
+# 生成基于当前时间的唯一文件名
+log_folder = "./logs"
+now = datetime.now()
+filename = now.strftime("%Y%m%d_%H%M%S") + ".log"
+log_path = os.path.join(log_folder, filename)
 
 class EngineCore:
     """Inner loop of vLLM's Engine."""
@@ -121,6 +128,10 @@ class EngineCore:
                         self.batch_queue_size)
             self.batch_queue = queue.Queue(self.batch_queue_size)
 
+        # 记录迭代的开始时间
+        self.last_iter_begin_time = 0
+        self.last_total_num_scheduled_tokens = 0
+
         self.request_idx = 0
         self.request_idx_dict: OrderedDict[str, int] = OrderedDict()
         self.request_lora_id_dict: OrderedDict[str, int] = OrderedDict()
@@ -193,7 +204,8 @@ class EngineCore:
             self.request_idx_dict[req.request_id] = self.request_idx
             self.request_lora_id_dict[req.request_id] = req.lora_request.lora_int_id if req.lora_request is not None else 0
             self.request_idx += 1
-            self.update_loras_ranks()
+            if req.lora_request is not None:
+                self.update_loras_ranks()
 
         self.scheduler.add_request(req)
 
@@ -208,36 +220,55 @@ class EngineCore:
 
     def step(self) -> EngineCoreOutputs:
         """Schedule, execute, and make output."""
+        with open(log_path, 'a') as log_file:
+            # 打印并记录上次迭代的计算时间
+            if self.last_iter_begin_time and self.last_total_num_scheduled_tokens:
+                message = f"iter computing time: {float(time.perf_counter_ns() - self.last_iter_begin_time)/1e6} ms\n"
+                print(message)
+                log_file.write(message + '\n')
+            self.last_iter_begin_time = time.perf_counter_ns()
 
-        # Check for any requests remaining in the scheduler - unfinished,
-        # or finished and not yet removed from the batch.
-        iter_begin_time = time.perf_counter_ns()
-        if not self.scheduler.has_requests():
-            return EngineCoreOutputs(
-                outputs=[],
-                scheduler_stats=self.scheduler.make_stats(),
-            )
-        scheduler_output = self.scheduler.schedule()
-        output = self.model_executor.execute_model(scheduler_output)
-        engine_core_outputs = self.scheduler.update_from_output(
-            scheduler_output, output)  # type: ignore
-        
-        print(f"\033[93mnew iteration, token budget: {self.scheduler.get_token_budget()}\033[0m")
-        for req in scheduler_output.scheduled_new_reqs:
-            new_req_idx = self.request_idx_dict[req.req_id]
-            new_req_lora_id = self.request_lora_id_dict[req.req_id]
-            new_req_lora_rank = self.lora_model_rank_dict[new_req_lora_id]
-            new_req_scheduled_tokens = scheduler_output.num_scheduled_tokens[req.req_id]
-            print(f"new request id: {new_req_idx}, scheduled tokens: {new_req_scheduled_tokens}, lora id: {new_req_lora_id}, lora rank: {new_req_lora_rank}")
-        for req in scheduler_output.scheduled_cached_reqs:
-            cached_req_idx = self.request_idx_dict[req.req_id]
-            cached_req_lora_id = self.request_lora_id_dict[req.req_id]
-            cached_req_lora_rank = self.lora_model_rank_dict[cached_req_lora_id]
-            cached_req_scheduled_tokens = scheduler_output.num_scheduled_tokens[req.req_id]
-            print(f"cached request id: {cached_req_idx}, scheduled tokens: {cached_req_scheduled_tokens}, lora id: {cached_req_lora_id}, lora rank: {cached_req_lora_rank}")
-        print(f"iter computing time: {float(time.perf_counter_ns() - iter_begin_time)/1e6} ms")
+            # Check for any requests remaining in the scheduler - unfinished,
+            # or finished and not yet removed from the batch.
+            if not self.scheduler.has_requests():
+                return EngineCoreOutputs(
+                    outputs=[],
+                    scheduler_stats=self.scheduler.make_stats(),
+                )
+            scheduler_output = self.scheduler.schedule()
+            output = self.model_executor.execute_model(scheduler_output)
+            engine_core_outputs = self.scheduler.update_from_output(
+                scheduler_output, output)  # type: ignore
+            
+            self.last_total_num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
+            if self.last_total_num_scheduled_tokens:
+                # 打印并记录新迭代信息
+                message = f"\033[93mnew iteration, token budget: {self.scheduler.get_token_budget()}, total scheduled tokens: {self.last_total_num_scheduled_tokens}\033[0m"
+                print(message)
+                message = f"new iteration, token budget: {self.scheduler.get_token_budget()}, total scheduled tokens: {self.last_total_num_scheduled_tokens}"
+                log_file.write(message + '\n')
 
-        return engine_core_outputs
+                # 打印并记录新请求信息
+                for req in scheduler_output.scheduled_new_reqs:
+                    new_req_idx = self.request_idx_dict[req.req_id]
+                    new_req_lora_id = self.request_lora_id_dict[req.req_id]
+                    new_req_lora_rank = self.lora_model_rank_dict[new_req_lora_id]
+                    new_req_scheduled_tokens = scheduler_output.num_scheduled_tokens[req.req_id]
+                    message = f"new request id: {new_req_idx}, scheduled tokens: {new_req_scheduled_tokens}, lora id: {new_req_lora_id}, lora rank: {new_req_lora_rank}"
+                    print(message)
+                    log_file.write(message + '\n')
+
+                # 打印并记录缓存请求信息
+                for req in scheduler_output.scheduled_cached_reqs:
+                    cached_req_idx = self.request_idx_dict[req.req_id]
+                    cached_req_lora_id = self.request_lora_id_dict[req.req_id]
+                    cached_req_lora_rank = self.lora_model_rank_dict[cached_req_lora_id]
+                    cached_req_scheduled_tokens = scheduler_output.num_scheduled_tokens[req.req_id]
+                    message = f"cached request id: {cached_req_idx}, scheduled tokens: {cached_req_scheduled_tokens}, lora id: {cached_req_lora_id}, lora rank: {cached_req_lora_rank}"
+                    print(message)
+                    log_file.write(message + '\n')
+
+            return engine_core_outputs
 
     def step_with_batch_queue(self) -> Optional[EngineCoreOutputs]:
         """Schedule and execute batches with the batch queue.

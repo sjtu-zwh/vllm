@@ -200,9 +200,11 @@ class Trace:
                 trace_dir += f"invocations_per_function_md.anon.d{self.start_d+1}.csv"
             self.duration_list = [str(i) for i in range(self.start_mnt+1, self.end_mnt+1)]
             self.function_histogram, self.function_names = load_trace(trace_name, trace_dir, self.duration_list, self.end_d, self.end_h, self.end_m, self.start_d, self.start_h, self.start_m, need_sort=need_sort)
+            self.num_req = len(self.function_histogram)
         elif trace_name == "azure_v2":
             trace_dir += 'AzureFunctionsInvocationTraceForTwoWeeksJan2021.txt'
             self.function_arrivals, self.function_names = load_trace(trace_name, trace_dir, [], self.end_d, self.end_h, self.end_m, self.start_d, self.start_h, self.start_m, need_sort=need_sort)
+            self.num_req = len(self.function_arrivals)
         else:
             raise NotImplementedError(f"trace_name {trace_name} not supported")
 
@@ -234,6 +236,7 @@ class Trace:
     def replay_to_workload(self, num_lora_models: int, num_reqs: int, arrival_distribution: str="gamma", 
                            interval_minutes: int=5, tot_rate: float = 4.0, cv: float = 1.0, map_stride: int = 1) -> List[Tuple[int, float]]:
         
+        num_reqs = min(num_reqs, self.num_req)
         model_mapping = self.map_model(num_lora_models, self.function_names, map_stride)
         model_histogram: Dict[int, np.array] = {}
         model_arrivals: Dict[int, np.array] = {}
