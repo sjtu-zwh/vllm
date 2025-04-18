@@ -32,6 +32,8 @@ class RequestFuncInput:
     extra_body: Optional[dict] = None
     multi_modal_content: Optional[dict] = None
     ignore_eos: bool = False
+    max_num_batched_tokens: Optional[int] = 0
+    is_warmup: Optional[bool] = False
 
 
 @dataclass
@@ -264,6 +266,8 @@ async def async_request_openai_completions(
             "stream_options": {
                 "include_usage": True,
             },
+            "max_num_batched_tokens": request_func_input.max_num_batched_tokens,
+            "is_warmup": request_func_input.is_warmup,
         }
         if request_func_input.ignore_eos:
             payload["ignore_eos"] = request_func_input.ignore_eos

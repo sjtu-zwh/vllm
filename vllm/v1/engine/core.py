@@ -199,15 +199,15 @@ class EngineCore:
             # Start grammar compilation asynchronously
             self.structured_output_manager.grammar_init(req)
 
-        if self.request_idx_dict.get(req.request_id) is None:
+        self.scheduler.add_request(req)
+
+        if self.request_idx_dict.get(req.request_id) is None and not self.scheduler.get_is_warmup():
             # If this is a new request, add it to the request index
             self.request_idx_dict[req.request_id] = self.request_idx
             self.request_lora_id_dict[req.request_id] = req.lora_request.lora_int_id if req.lora_request is not None else 0
             self.request_idx += 1
             if req.lora_request is not None:
                 self.update_loras_ranks()
-
-        self.scheduler.add_request(req)
 
     def abort_requests(self, request_ids: list[str]):
         """Abort requests from the scheduler."""
@@ -222,7 +222,7 @@ class EngineCore:
         """Schedule, execute, and make output."""
         with open(log_path, 'a') as log_file:
             # 打印并记录上次迭代的计算时间
-            if self.last_iter_begin_time and self.last_total_num_scheduled_tokens:
+            if self.last_iter_begin_time and self.last_total_num_scheduled_tokens and not self.scheduler.get_is_warmup():
                 message = f"iter computing time: {float(time.perf_counter_ns() - self.last_iter_begin_time)/1e6} ms\n"
                 print(message)
                 log_file.write(message + '\n')
@@ -241,7 +241,7 @@ class EngineCore:
                 scheduler_output, output)  # type: ignore
             
             self.last_total_num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
-            if self.last_total_num_scheduled_tokens:
+            if self.last_total_num_scheduled_tokens and not self.scheduler.get_is_warmup():
                 # 打印并记录新迭代信息
                 message = f"\033[93mnew iteration, token budget: {self.scheduler.get_token_budget()}, total scheduled tokens: {self.last_total_num_scheduled_tokens}\033[0m"
                 print(message)

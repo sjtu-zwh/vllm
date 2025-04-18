@@ -142,3 +142,8 @@ class SchedulerInterface(ABC):
     def get_token_budget(self) -> Iterable[str]:
         """Get the token budget in one iteration."""
         raise NotImplementedError
+    
+    @abstractmethod
+    def get_is_warmup(self) -> bool:
+        """Get warmup state."""
+        raise NotImplementedError

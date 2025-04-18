@@ -287,6 +287,8 @@ async def benchmark(
         logprobs=logprobs,
         multi_modal_content=test_mm_content,
         ignore_eos=ignore_eos,
+        is_warmup=True,
+        max_num_batched_tokens=args.chunked_size if not profile else 0
     )
 
     test_output = await request_func(request_func_input=test_input)
@@ -313,7 +315,9 @@ async def benchmark(
                                          output_len=test_output_len,
                                          logprobs=logprobs,
                                          multi_modal_content=test_mm_content,
-                                         ignore_eos=ignore_eos)
+                                         ignore_eos=ignore_eos,
+                                         is_warmup=True,
+                                         max_num_batched_tokens=args.chunked_size)
         profile_output = await request_func(request_func_input=profile_input)
         if profile_output.success:
             print("Profiler started")
@@ -363,7 +367,8 @@ async def benchmark(
                                               output_len=output_len,
                                               logprobs=logprobs,
                                               multi_modal_content=mm_content,
-                                              ignore_eos=ignore_eos)
+                                              ignore_eos=ignore_eos,
+                                              is_warmup=False,)
         tasks.append(
             asyncio.create_task(
                 limited_request_func(request_func_input=request_func_input,
@@ -1024,6 +1029,11 @@ if __name__ == "__main__":
                         help="A subset of LoRA module names passed in when "
                         "launching the server. For each request, the "
                         "script chooses a LoRA module at random.")
+    
+    parser.add_argument("--chunked-size",
+                    type=int,
+                    default=0,
+                    help="max batched tokens num")
 
     args = parser.parse_args()
 

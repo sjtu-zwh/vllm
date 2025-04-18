@@ -237,6 +237,9 @@ class SamplingParams(
     bad_words: Optional[list[str]] = None
     _bad_words_token_ids: Optional[list[list[int]]] = None
 
+    max_num_batched_tokens: int = 0
+    is_warmup: bool = False
+
     @staticmethod
     def from_optional(
         n: Optional[int] = 1,
@@ -269,6 +272,8 @@ class SamplingParams(
         logit_bias: Optional[Union[dict[int, float], dict[str, float]]] = None,
         allowed_token_ids: Optional[list[int]] = None,
         extra_args: Optional[dict[str, Any]] = None,
+        max_num_batched_tokens: int = -1,
+        is_warmup: bool = False,
     ) -> "SamplingParams":
         if logit_bias is not None:
             # Convert token_id to integer
@@ -311,6 +316,8 @@ class SamplingParams(
             logit_bias=logit_bias,
             allowed_token_ids=allowed_token_ids,
             extra_args=extra_args,
+            max_num_batched_tokens=max_num_batched_tokens,
+            is_warmup = is_warmup
         )
 
     def __post_init__(self) -> None:

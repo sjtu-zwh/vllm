@@ -112,6 +112,8 @@ class Scheduler(SchedulerInterface):
         self.encoder_cache_manager = EncoderCacheManager(
             cache_size=encoder_cache_size)
 
+        self.is_warmup = False 
+
     def schedule(self) -> SchedulerOutput:
         # NOTE(woosuk) on the scheduling algorithm:
         # There's no "decoding phase" nor "prefill phase" in the scheduler.
@@ -673,6 +675,13 @@ class Scheduler(SchedulerInterface):
         return engine_core_outputs
 
     def add_request(self, request: Request) -> None:
+        self.is_warmup = request.sampling_params.is_warmup
+        print(f"Request {request.request_id} is warmup: {self.is_warmup}")
+        new_max_num_batched_tokens = request.sampling_params.max_num_batched_tokens
+        if new_max_num_batched_tokens > 0 and self.is_warmup:
+            # Override the default max_num_batched_tokens
+            # for this request.
+            self.max_num_scheduled_tokens = new_max_num_batched_tokens
         self.waiting.append(request)
         self.requests[request.request_id] = request
         if self.log_stats:
@@ -760,3 +769,7 @@ class Scheduler(SchedulerInterface):
     
     def get_token_budget(self) -> int:
         return self.max_num_scheduled_tokens
+    
+
+    def get_is_warmup(self) -> bool:
+        return self.is_warmup
