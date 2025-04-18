@@ -48,13 +48,6 @@ POLLING_TIMEOUT_S = 2.5
 
 _R = TypeVar('_R')  # Return type for collective_rpc
 
-
-# 生成基于当前时间的唯一文件名
-log_folder = "./logs"
-now = datetime.now()
-filename = now.strftime("%Y%m%d_%H%M%S") + ".log"
-log_path = os.path.join(log_folder, filename)
-
 class EngineCore:
     """Inner loop of vLLM's Engine."""
 
@@ -138,6 +131,13 @@ class EngineCore:
         self.lora_model_rank_dict: OrderedDict[int, int] = OrderedDict()
         self.lora_model_rank_dict[0] = 0
 
+        # 生成基于当前时间的唯一文件名
+        self.log_folder = "./logs"
+        now = datetime.now()
+        self.log_filename = now.strftime("%Y%m%d_%H%M%S") + ".log"
+        self.log_path = os.path.join(self.log_folder, self.log_filename)
+        self.log_file = None
+
     def _initialize_kv_caches(
             self, vllm_config: VllmConfig) -> tuple[int, int, KVCacheConfig]:
         start = time.time()
@@ -201,6 +201,15 @@ class EngineCore:
 
         self.scheduler.add_request(req)
 
+        if self.scheduler.get_is_warmup():
+            now = datetime.now()
+            self.log_filename = now.strftime("%Y%m%d_%H%M%S") + ".log"
+            self.log_path = os.path.join(self.log_folder, self.log_filename)
+            self.request_idx = 0
+            self.request_idx_dict.clear()
+            self.request_lora_id_dict.clear()
+            self.lora_model_rank_dict.clear()
+
         if self.request_idx_dict.get(req.request_id) is None and not self.scheduler.get_is_warmup():
             # If this is a new request, add it to the request index
             self.request_idx_dict[req.request_id] = self.request_idx
@@ -220,7 +229,7 @@ class EngineCore:
 
     def step(self) -> EngineCoreOutputs:
         """Schedule, execute, and make output."""
-        with open(log_path, 'a') as log_file:
+        with open(self.log_path, 'a') as log_file:
             # 打印并记录上次迭代的计算时间
             if self.last_iter_begin_time and self.last_total_num_scheduled_tokens and not self.scheduler.get_is_warmup():
                 message = f"iter computing time: {float(time.perf_counter_ns() - self.last_iter_begin_time)/1e6} ms\n"
