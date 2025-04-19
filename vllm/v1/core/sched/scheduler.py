@@ -678,10 +678,22 @@ class Scheduler(SchedulerInterface):
         self.is_warmup = request.sampling_params.is_warmup
         print(f"Request {request.request_id} is warmup: {self.is_warmup}")
         new_max_num_batched_tokens = request.sampling_params.max_num_batched_tokens
-        if new_max_num_batched_tokens > 0 and self.is_warmup:
+        new_max_num_seqs = request.sampling_params.max_num_seqs
+    
+        if self.is_warmup:
             # Override the default max_num_batched_tokens
             # for this request.
-            self.max_num_scheduled_tokens = new_max_num_batched_tokens
+            if new_max_num_batched_tokens > 0:
+                self.max_num_scheduled_tokens = new_max_num_batched_tokens
+            else:
+                # Reset to the default value.
+                self.max_num_scheduled_tokens = self.scheduler_config.max_num_batched_tokens
+            if new_max_num_seqs > 0:
+                self.max_num_running_reqs = new_max_num_seqs
+            else:
+                # Reset to the default value.
+                self.max_num_running_reqs = self.scheduler_config.max_num_seqs
+            
         self.waiting.append(request)
         self.requests[request.request_id] = request
         if self.log_stats:
@@ -773,3 +785,11 @@ class Scheduler(SchedulerInterface):
 
     def get_is_warmup(self) -> bool:
         return self.is_warmup
+    
+    def get_request(self, req_id: str) -> "Request":
+        if req_id not in self.requests:
+            return None
+        return self.requests[req_id]
+    
+    def get_max_num_seqs(self) -> int:
+        return self.max_num_running_reqs

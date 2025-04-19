@@ -147,3 +147,12 @@ class SchedulerInterface(ABC):
     def get_is_warmup(self) -> bool:
         """Get warmup state."""
         raise NotImplementedError
+    
+    @abstractmethod
+    def get_request(self, req_id: str) -> "Request":
+        """Get the list of requests in the scheduler."""
+        raise NotImplementedError
+    
+    def get_max_num_seqs(self) -> int:
+        """Get the maximum number of sequences in the scheduler."""
+        return NotImplementedError

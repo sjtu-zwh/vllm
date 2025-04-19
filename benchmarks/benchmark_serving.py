@@ -288,7 +288,7 @@ async def benchmark(
         multi_modal_content=test_mm_content,
         ignore_eos=ignore_eos,
         is_warmup=True,
-        max_num_batched_tokens=args.chunked_size if not profile else 0
+        max_num_batched_tokens=args.chunk_size if not profile else 0
     )
 
     test_output = await request_func(request_func_input=test_input)
@@ -317,7 +317,7 @@ async def benchmark(
                                          multi_modal_content=test_mm_content,
                                          ignore_eos=ignore_eos,
                                          is_warmup=True,
-                                         max_num_batched_tokens=args.chunked_size)
+                                         max_num_batched_tokens=args.chunk_size)
         profile_output = await request_func(request_func_input=profile_input)
         if profile_output.success:
             print("Profiler started")
@@ -1030,7 +1030,7 @@ if __name__ == "__main__":
                         "launching the server. For each request, the "
                         "script chooses a LoRA module at random.")
     
-    parser.add_argument("--chunked-size",
+    parser.add_argument("--chunk-size",
                     type=int,
                     default=0,
                     help="max batched tokens num")

@@ -237,6 +237,7 @@ class SamplingParams(
     bad_words: Optional[list[str]] = None
     _bad_words_token_ids: Optional[list[list[int]]] = None
 
+    max_num_seqs: int = 0
     max_num_batched_tokens: int = 0
     is_warmup: bool = False
 
@@ -274,6 +275,7 @@ class SamplingParams(
         extra_args: Optional[dict[str, Any]] = None,
         max_num_batched_tokens: int = -1,
         is_warmup: bool = False,
+        max_num_seqs: int = -1,
     ) -> "SamplingParams":
         if logit_bias is not None:
             # Convert token_id to integer
@@ -317,7 +319,8 @@ class SamplingParams(
             allowed_token_ids=allowed_token_ids,
             extra_args=extra_args,
             max_num_batched_tokens=max_num_batched_tokens,
-            is_warmup = is_warmup
+            is_warmup = is_warmup,
+            max_num_seqs=max_num_seqs,
         )
 
     def __post_init__(self) -> None:

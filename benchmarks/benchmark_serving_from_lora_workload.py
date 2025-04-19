@@ -244,68 +244,18 @@ async def benchmark_from_lora_workload(
         request_func = ASYNC_REQUEST_FUNCS[backend]
     else:
         raise ValueError(f"Unknown backend: {backend}")
+    
+    if lora_modules is not None:
+        lora_modules_list = list(lora_modules)
+        lora_modules_cnt = len(lora_modules_list)
+    else:
+        lora_modules_cnt = 0
 
-    print("Starting initial single prompt test run...")
     test_prompt, test_prompt_len, test_output_len, test_mm_content = \
-        input_requests[0].prompt, input_requests[0].prompt_len, \
-        input_requests[0].expected_output_len, \
-            input_requests[0].multi_modal_data
-
-    if backend != "openai-chat" and test_mm_content is not None:
-        # multi-modal benchmark is only available on OpenAI Chat backend.
-        raise ValueError(
-            "Multi-modal content is only supported on 'openai-chat' backend.")
-    assert test_mm_content is None or isinstance(test_mm_content, dict)
-    test_input = RequestFuncInput(
-        model=model_id,
-        model_name=model_name,
-        prompt=test_prompt,
-        api_url=api_url,
-        prompt_len=test_prompt_len,
-        output_len=test_output_len,
-        logprobs=logprobs,
-        multi_modal_content=test_mm_content,
-        ignore_eos=ignore_eos,
-        is_warmup=True,
-        max_num_batched_tokens=args.chunked_size if not profile else 0
-    )
-
-    test_output = await request_func(request_func_input=test_input)
-    if not test_output.success:
-        raise ValueError(
-            "Initial test run failed - Please make sure benchmark arguments "
-            f"are correctly specified. Error: {test_output.error}")
-    else:
-        print("Initial test run completed. Starting main benchmark run...")
-
-    if profile:
-        print("Starting profiler...")
-        profile_input = RequestFuncInput(model=model_id,
-                                         model_name=model_name,
-                                         prompt=test_prompt,
-                                         api_url=base_url + "/start_profile",
-                                         prompt_len=test_prompt_len,
-                                         output_len=test_output_len,
-                                         logprobs=logprobs,
-                                         multi_modal_content=test_mm_content,
-                                         ignore_eos=ignore_eos,
-                                         is_warmup=True,
-                                         max_num_batched_tokens=args.chunked_size)
-        profile_output = await request_func(request_func_input=profile_input)
-        if profile_output.success:
-            print("Profiler started")
-
-    if burstiness == 1.0:
-        distribution = "Poisson process"
-    else:
-        distribution = "Gamma distribution"
-
-    print(f"Traffic request rate: {request_rate}")
-    print(f"Burstiness factor: {args.cv} ({distribution})")
-    print(f"Maximum request concurrency: {max_concurrency}")
-
-    pbar = None if disable_tqdm else tqdm(total=len(input_requests))
-
+    input_requests[0].prompt, input_requests[0].prompt_len, \
+    input_requests[0].expected_output_len, \
+        input_requests[0].multi_modal_data
+    
     # This can be used once the minimum Python version is 3.10 or higher,
     # and it will simplify the code in limited_request_func.
     #    semaphore = (asyncio.Semaphore(max_concurrency)
@@ -320,12 +270,65 @@ async def benchmark_from_lora_workload(
         async with semaphore:
             return await request_func(request_func_input=request_func_input,
                                       pbar=pbar)
-    
-    if lora_modules is not None:
-        lora_modules_list = list(lora_modules)
-        lora_modules_cnt = len(lora_modules_list)
+
+    print("Starting prompts test run...")
+
+    tasks: list[asyncio.Task] = []
+    async for lora_model_id, request in get_request_from_workload(input_requests, workload):
+        prompt, prompt_len, output_len, mm_content = request.prompt, \
+            request.prompt_len, request.expected_output_len, \
+                request.multi_modal_data
+        if lora_modules_cnt > 0:
+            req_model_id, req_model_name = lora_model_id + 1, lora_modules_list[lora_model_id]
+        else:
+            req_model_id, req_model_name = model_id, model_name
+
+        request_func_input = RequestFuncInput(model=req_model_id,
+                                              model_name=req_model_name,
+                                              prompt=prompt,
+                                              api_url=api_url,
+                                              prompt_len=prompt_len,
+                                              output_len=output_len,
+                                              logprobs=logprobs,
+                                              multi_modal_content=mm_content,
+                                              ignore_eos=ignore_eos,
+                                              is_warmup=True,
+                                              max_num_batched_tokens=args.chunk_size,
+                                              max_num_seqs=args.max_batch_size)
+        tasks.append(
+            asyncio.create_task(
+                request_func(request_func_input=request_func_input)))
+    outputs: list[RequestFuncOutput] = await asyncio.gather(*tasks)
+    print("Initial test run completed. Starting main benchmark run...")
+
+    if profile:
+        print("Starting profiler...")
+        profile_input = RequestFuncInput(model=model_id,
+                                         model_name=model_name,
+                                         prompt=test_prompt,
+                                         api_url=base_url + "/start_profile",
+                                         prompt_len=test_prompt_len,
+                                         output_len=test_output_len,
+                                         logprobs=logprobs,
+                                         multi_modal_content=test_mm_content,
+                                         ignore_eos=ignore_eos,
+                                         is_warmup=True,
+                                         max_num_batched_tokens=args.chunk_size,
+                                         max_num_seqs=args.max_batch_size)
+        profile_output = await request_func(request_func_input=profile_input)
+        if profile_output.success:
+            print("Profiler started")
+
+    if burstiness == 1.0:
+        distribution = "Poisson process"
     else:
-        lora_modules_cnt = 0
+        distribution = "Gamma distribution"
+
+    print(f"Traffic request rate: {request_rate}")
+    print(f"Burstiness factor: {args.cv} ({distribution})")
+    print(f"Maximum request concurrency: {max_concurrency}")
+
+    pbar = None if disable_tqdm else tqdm(total=len(input_requests))
 
     benchmark_start_time = time.perf_counter()
     tasks: list[asyncio.Task] = []
@@ -1079,10 +1082,15 @@ if __name__ == "__main__":
                         "launching the server. For each request, the "
                         "script chooses a LoRA module at random.")
     
-    parser.add_argument("--chunked-size",
+    parser.add_argument("--chunk-size",
                         type=int,
                         default=0,
                         help="max batched tokens num")
+    
+    parser.add_argument("--max-batch-size",
+                        type=int,
+                        default=0,
+                        help="max batched seq num")
 
     args = parser.parse_args()
 

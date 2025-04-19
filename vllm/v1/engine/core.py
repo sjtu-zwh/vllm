@@ -121,13 +121,18 @@ class EngineCore:
                         self.batch_queue_size)
             self.batch_queue = queue.Queue(self.batch_queue_size)
 
-        # 记录迭代的开始时间
-        self.last_iter_begin_time = 0
-        self.last_total_num_scheduled_tokens = 0
+        # 记录迭代的结束时间
+        self.iter_end_time = 0
+        self.total_num_scheduled_tokens = 0
+        self.first_req_arrival_time = 0
 
         self.request_idx = 0
         self.request_idx_dict: OrderedDict[str, int] = OrderedDict()
         self.request_lora_id_dict: OrderedDict[str, int] = OrderedDict()
+        self.request_ttft_dict: OrderedDict[str, float] = OrderedDict()
+        self.request_latency_dict: OrderedDict[str, float] = OrderedDict()
+        self.request_osl_dict: OrderedDict[str, int] = OrderedDict() # output seq length
+        self.request_arrival_time_dict: OrderedDict[str, float] = OrderedDict()
         self.lora_model_rank_dict: OrderedDict[int, int] = OrderedDict()
         self.lora_model_rank_dict[0] = 0
 
@@ -209,11 +214,25 @@ class EngineCore:
             self.request_idx_dict.clear()
             self.request_lora_id_dict.clear()
             self.lora_model_rank_dict.clear()
+            self.request_ttft_dict.clear()
+            self.request_latency_dict.clear()
+            self.request_osl_dict.clear()
+            self.iter_end_time = 0
+            self.first_req_arrival_time = 0
+            self.total_num_scheduled_tokens = 0
 
         if self.request_idx_dict.get(req.request_id) is None and not self.scheduler.get_is_warmup():
+            if self.request_idx == 0:
+                # First request, set the first arrival time
+                self.first_req_arrival_time = time.perf_counter_ns()
             # If this is a new request, add it to the request index
+            self.request_arrival_time_dict[req.request_id] = time.perf_counter_ns()
             self.request_idx_dict[req.request_id] = self.request_idx
             self.request_lora_id_dict[req.request_id] = req.lora_request.lora_int_id if req.lora_request is not None else 0
+            self.request_ttft_dict[req.request_id] = 0
+            self.request_latency_dict[req.request_id] = 0
+            self.request_osl_dict[req.request_id] = 0
+
             self.request_idx += 1
             if req.lora_request is not None:
                 self.update_loras_ranks()
@@ -229,55 +248,89 @@ class EngineCore:
 
     def step(self) -> EngineCoreOutputs:
         """Schedule, execute, and make output."""
-        with open(self.log_path, 'a') as log_file:
-            # 打印并记录上次迭代的计算时间
-            if self.last_iter_begin_time and self.last_total_num_scheduled_tokens and not self.scheduler.get_is_warmup():
-                message = f"iter computing time: {float(time.perf_counter_ns() - self.last_iter_begin_time)/1e6} ms\n"
-                print(message)
-                log_file.write(message + '\n')
-            self.last_iter_begin_time = time.perf_counter_ns()
+        # Check for any requests remaining in the scheduler - unfinished,
+        # or finished and not yet removed from the batch.
+        iteration_start_time = time.perf_counter_ns()
+        if not self.scheduler.has_requests():
+            return EngineCoreOutputs(
+                outputs=[],
+                scheduler_stats=self.scheduler.make_stats(),
+            )
+        scheduler_output = self.scheduler.schedule()
+        output = self.model_executor.execute_model(scheduler_output)
+        engine_core_outputs = self.scheduler.update_from_output(
+            scheduler_output, output)  # type: ignore
+        
+        # If the scheduler is not in warmup mode, we need to log the stats
+        # and update the request ttft, latency, and output seq length
+        if not self.scheduler.get_is_warmup():
+            with open(self.log_path, 'a') as log_file:
+                self.total_num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
+                if self.total_num_scheduled_tokens:
+                    # new iteration info
+                    message = f"new iteration, token budget: {self.scheduler.get_token_budget()}, total scheduled tokens: {self.total_num_scheduled_tokens}, max num seqs: {self.scheduler.get_max_num_seqs()}"
+                    print("\n\033[93m" + message + "\033[0m")
+                    log_file.write('\n' + message + '\n')
+                    
+                    scheduled_req_list = []
+                    # cached request info
+                    for req in scheduler_output.scheduled_cached_reqs:
+                        scheduled_req_list.append(req.req_id)
+                        cached_req_idx = self.request_idx_dict[req.req_id]
+                        cached_req_lora_id = self.request_lora_id_dict[req.req_id]
+                        cached_req_lora_rank = self.lora_model_rank_dict[cached_req_lora_id]
+                        cached_req_scheduled_tokens = scheduler_output.num_scheduled_tokens[req.req_id]
+                        message = f"cached request id: {cached_req_idx}, scheduled tokens: {cached_req_scheduled_tokens}, lora id: {cached_req_lora_id}, lora rank: {cached_req_lora_rank}"
+                        print(message)
+                        log_file.write(message + '\n')
 
-            # Check for any requests remaining in the scheduler - unfinished,
-            # or finished and not yet removed from the batch.
-            if not self.scheduler.has_requests():
-                return EngineCoreOutputs(
-                    outputs=[],
-                    scheduler_stats=self.scheduler.make_stats(),
-                )
-            scheduler_output = self.scheduler.schedule()
-            output = self.model_executor.execute_model(scheduler_output)
-            engine_core_outputs = self.scheduler.update_from_output(
-                scheduler_output, output)  # type: ignore
-            
-            self.last_total_num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
-            if self.last_total_num_scheduled_tokens and not self.scheduler.get_is_warmup():
-                # 打印并记录新迭代信息
-                message = f"\033[93mnew iteration, token budget: {self.scheduler.get_token_budget()}, total scheduled tokens: {self.last_total_num_scheduled_tokens}\033[0m"
-                print(message)
-                message = f"new iteration, token budget: {self.scheduler.get_token_budget()}, total scheduled tokens: {self.last_total_num_scheduled_tokens}"
-                log_file.write(message + '\n')
+                    # new request info
+                    for req in scheduler_output.scheduled_new_reqs:
+                        scheduled_req_list.append(req.req_id)
+                        new_req_idx = self.request_idx_dict[req.req_id]
+                        new_req_lora_id = self.request_lora_id_dict[req.req_id]
+                        new_req_lora_rank = self.lora_model_rank_dict[new_req_lora_id]
+                        new_req_scheduled_tokens = scheduler_output.num_scheduled_tokens[req.req_id]
+                        message = f"new request id: {new_req_idx}, scheduled tokens: {new_req_scheduled_tokens}, lora id: {new_req_lora_id}, lora rank: {new_req_lora_rank}"
+                        print(message)
+                        log_file.write(message + '\n')
 
-                # 打印并记录新请求信息
-                for req in scheduler_output.scheduled_new_reqs:
-                    new_req_idx = self.request_idx_dict[req.req_id]
-                    new_req_lora_id = self.request_lora_id_dict[req.req_id]
-                    new_req_lora_rank = self.lora_model_rank_dict[new_req_lora_id]
-                    new_req_scheduled_tokens = scheduler_output.num_scheduled_tokens[req.req_id]
-                    message = f"new request id: {new_req_idx}, scheduled tokens: {new_req_scheduled_tokens}, lora id: {new_req_lora_id}, lora rank: {new_req_lora_rank}"
-                    print(message)
-                    log_file.write(message + '\n')
+                    # iteration time
+                    if self.total_num_scheduled_tokens:
+                        iter_time = float(time.perf_counter_ns() - iteration_start_time)/1e6 + 1
+                        message = f"iter computing time: {iter_time} ms"
+                        print(message)
+                        log_file.write(message + '\n')
+                        
+                        for req_id in scheduled_req_list:
+                            req = self.scheduler.get_request(req_id)
+                            self.request_latency_dict[req_id] += iter_time
+                            if req is not None:
+                                self.request_osl_dict[req_id] = req.num_output_tokens
+                                if self.request_osl_dict[req_id] <= 1:
+                                    if self.request_ttft_dict[req_id] == 0:
+                                        self.request_ttft_dict[req_id] += float(time.perf_counter_ns() - self.request_arrival_time_dict[req_id])/1e6
+                                    else:
+                                        self.request_ttft_dict[req_id] += iter_time
+                            else:
+                                self.request_osl_dict[req_id] += 1
+                                if self.request_osl_dict[req_id] == 1:
+                                    if self.request_ttft_dict[req_id] == 0:
+                                        self.request_ttft_dict[req_id] += float(time.perf_counter_ns() - self.request_arrival_time_dict[req_id])/1e6
+                                    else:
+                                        self.request_ttft_dict[req_id] += iter_time
 
-                # 打印并记录缓存请求信息
-                for req in scheduler_output.scheduled_cached_reqs:
-                    cached_req_idx = self.request_idx_dict[req.req_id]
-                    cached_req_lora_id = self.request_lora_id_dict[req.req_id]
-                    cached_req_lora_rank = self.lora_model_rank_dict[cached_req_lora_id]
-                    cached_req_scheduled_tokens = scheduler_output.num_scheduled_tokens[req.req_id]
-                    message = f"cached request id: {cached_req_idx}, scheduled tokens: {cached_req_scheduled_tokens}, lora id: {cached_req_lora_id}, lora rank: {cached_req_lora_rank}"
-                    print(message)
-                    log_file.write(message + '\n')
+                                request_idx = self.request_idx_dict[req_id]
+                                ttft = self.request_ttft_dict[req_id]
+                                latency = self.request_latency_dict[req_id]
+                                osl = self.request_osl_dict[req_id]
+                                tpot = (latency - ttft)/(osl - 1)
 
-            return engine_core_outputs
+                                message = f"request id: {request_idx}, ttft: {ttft}, tpot: {tpot}"
+                                print(message)
+                                log_file.write(message + '\n')
+
+        return engine_core_outputs
 
     def step_with_batch_queue(self) -> Optional[EngineCoreOutputs]:
         """Schedule and execute batches with the batch queue.

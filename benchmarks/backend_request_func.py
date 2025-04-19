@@ -34,6 +34,7 @@ class RequestFuncInput:
     ignore_eos: bool = False
     max_num_batched_tokens: Optional[int] = 0
     is_warmup: Optional[bool] = False
+    max_num_seqs: Optional[int] = 0
 
 
 @dataclass
@@ -268,6 +269,7 @@ async def async_request_openai_completions(
             },
             "max_num_batched_tokens": request_func_input.max_num_batched_tokens,
             "is_warmup": request_func_input.is_warmup,
+            "max_num_seqs": request_func_input.max_num_seqs,
         }
         if request_func_input.ignore_eos:
             payload["ignore_eos"] = request_func_input.ignore_eos
@@ -289,6 +291,7 @@ async def async_request_openai_completions(
                 if response.status == 200:
                     first_chunk_received = False
                     async for chunk_bytes in response.content:
+                        timestamp = time.perf_counter()
                         chunk_bytes = chunk_bytes.strip()
                         if not chunk_bytes:
                             continue
@@ -305,11 +308,10 @@ async def async_request_openai_completions(
                                 # Note that text could be empty here
                                 # e.g. for special tokens
                                 text = choices[0].get("text")
-                                timestamp = time.perf_counter()
                                 # First token
                                 if not first_chunk_received:
                                     first_chunk_received = True
-                                    ttft = time.perf_counter() - st
+                                    ttft = timestamp - st
                                     output.ttft = ttft
 
                                 # Decoding phase
