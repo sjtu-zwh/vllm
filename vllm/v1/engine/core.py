@@ -339,7 +339,7 @@ class EngineCore:
                                 latency = self.request_latency_dict[req_id]
                                 osl = self.request_osl_dict[req_id]
                                 tpot = (latency - compute_ttft)/(osl - 1) + DECODE_PROCESSING_TIME
-                                queue_time = ttft - compute_ttft
+                                queue_time = max(ttft - compute_ttft, 0)
 
                                 message = f"request id: {request_idx}, ttft: {ttft}, compute ttft: {compute_ttft}, queue time: {queue_time}, tpot: {tpot}"
                                 print(message)
