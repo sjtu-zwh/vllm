@@ -257,12 +257,6 @@ class EngineCore:
 
     def step(self) -> EngineCoreOutputs:
         """Schedule, execute, and make output."""
-        if not self.scheduler.get_is_warmup():
-            with open(self.log_path, 'a') as log_file:
-                message = f"iteration begin, token budget: {self.scheduler.get_token_budget()}, max num seqs: {self.scheduler.get_max_num_seqs()}\ncomputing ..."
-                print("\n\033[93m" + message + "\033[0m")
-                log_file.write('\n' + message + '\n')
-
         # Check for any requests remaining in the scheduler - unfinished,
         # or finished and not yet removed from the batch.
         iteration_start_time = time.perf_counter_ns()
@@ -271,6 +265,13 @@ class EngineCore:
                 outputs=[],
                 scheduler_stats=self.scheduler.make_stats(),
             )
+        
+        if not self.scheduler.get_is_warmup():
+            with open(self.log_path, 'a') as log_file:
+                message = f"iteration begin, token budget: {self.scheduler.get_token_budget()}, max num seqs: {self.scheduler.get_max_num_seqs()}\ncomputing ..."
+                print("\n\033[93m" + message + "\033[0m")
+                log_file.write('\n' + message + '\n')
+        
         scheduler_output = self.scheduler.schedule()
         output = self.model_executor.execute_model(scheduler_output)
         engine_core_outputs = self.scheduler.update_from_output(
