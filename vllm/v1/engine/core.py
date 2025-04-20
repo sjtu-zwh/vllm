@@ -46,6 +46,10 @@ logger = init_logger(__name__)
 
 POLLING_TIMEOUT_S = 2.5
 
+OUTPUT_PROCESSING_TIME = 2
+INPUT_PROCESSING_TIME = 4.2
+DECODE_PROCESSING_TIME = 0.9
+
 _R = TypeVar('_R')  # Return type for collective_rpc
 
 class EngineCore:
@@ -308,13 +312,15 @@ class EngineCore:
                         
                         for req_id in scheduled_req_list:
                             req = self.scheduler.get_request(req_id)
+                            req_arrival_time = self.request_arrival_time_dict[req_id]
                             self.request_latency_dict[req_id] += iter_time
                             if req is not None:
                                 self.request_osl_dict[req_id] = req.num_output_tokens
                                 if self.request_osl_dict[req_id] <= 1:
                                     self.request_compute_ttft_dict[req_id] += iter_time
                                     if self.request_ttft_dict[req_id] == 0:
-                                        self.request_ttft_dict[req_id] += float(time.perf_counter_ns() - self.request_arrival_time_dict[req_id])/1e6
+                                        first_iter_time = float(time.perf_counter_ns() - req_arrival_time)/1e6
+                                        self.request_ttft_dict[req_id] += first_iter_time
                                     else:
                                         self.request_ttft_dict[req_id] += iter_time
                             else:
@@ -322,18 +328,20 @@ class EngineCore:
                                 if self.request_osl_dict[req_id] == 1:
                                     self.request_compute_ttft_dict[req_id] += iter_time
                                     if self.request_ttft_dict[req_id] == 0:
-                                        self.request_ttft_dict[req_id] += float(time.perf_counter_ns() - self.request_arrival_time_dict[req_id])/1e6
+                                        first_iter_time = float(time.perf_counter_ns() - req_arrival_time)/1e6
+                                        self.request_ttft_dict[req_id] += first_iter_time
                                     else:
                                         self.request_ttft_dict[req_id] += iter_time
 
                                 request_idx = self.request_idx_dict[req_id]
-                                ttft = self.request_ttft_dict[req_id]
-                                compute_ttft = self.request_compute_ttft_dict[req_id]
+                                ttft = self.request_ttft_dict[req_id] + OUTPUT_PROCESSING_TIME
+                                compute_ttft = self.request_compute_ttft_dict[req_id] + INPUT_PROCESSING_TIME + OUTPUT_PROCESSING_TIME
                                 latency = self.request_latency_dict[req_id]
                                 osl = self.request_osl_dict[req_id]
-                                tpot = (latency - ttft)/(osl - 1)
+                                tpot = (latency - compute_ttft)/(osl - 1) + DECODE_PROCESSING_TIME
+                                queue_time = ttft - compute_ttft
 
-                                message = f"request id: {request_idx}, ttft: {ttft}, compute ttft: {compute_ttft}, tpot: {tpot}"
+                                message = f"request id: {request_idx}, ttft: {ttft}, compute ttft: {compute_ttft}, queue time: {queue_time}, tpot: {tpot}"
                                 print(message)
                                 log_file.write(message + '\n')
 

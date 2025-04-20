@@ -158,6 +158,8 @@ def calculate_metrics(
             completed += 1
         else:
             actual_output_lens.append(0)
+    print(f"ttft: {ttfts}")
+    print(f"tpot: {all_tpots}")
 
     if goodput_config_dict:
         valid_metrics = []
@@ -271,8 +273,9 @@ async def benchmark_from_lora_workload(
             return await request_func(request_func_input=request_func_input,
                                       pbar=pbar)
 
-    print("Starting prompts test run...")
+    print("Starting warmup...")
 
+    pbar_warmup = None if disable_tqdm else tqdm(total=len(input_requests))
     tasks: list[asyncio.Task] = []
     async for lora_model_id, request in get_request_from_workload(input_requests, workload):
         prompt, prompt_len, output_len, mm_content = request.prompt, \
@@ -297,9 +300,10 @@ async def benchmark_from_lora_workload(
                                               max_num_seqs=args.max_batch_size)
         tasks.append(
             asyncio.create_task(
-                request_func(request_func_input=request_func_input)))
+                request_func(request_func_input=request_func_input,
+                             pbar=pbar_warmup)))
     outputs: list[RequestFuncOutput] = await asyncio.gather(*tasks)
-    print("Initial test run completed. Starting main benchmark run...")
+    print("Warmup completed. Starting main benchmark run...")
 
     if profile:
         print("Starting profiler...")
