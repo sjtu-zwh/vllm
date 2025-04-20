@@ -676,7 +676,7 @@ class Scheduler(SchedulerInterface):
 
     def add_request(self, request: Request) -> None:
         self.is_warmup = request.sampling_params.is_warmup
-        print(f"Request {request.request_id} is warmup: {self.is_warmup}")
+        # print(f"Request {request.request_id} is warmup: {self.is_warmup}")
         new_max_num_batched_tokens = request.sampling_params.max_num_batched_tokens
         new_max_num_seqs = request.sampling_params.max_num_seqs
     

@@ -51,7 +51,7 @@ class AsyncLLM(EngineClient):
         usage_context: UsageContext = UsageContext.ENGINE_CONTEXT,
         mm_registry: MultiModalRegistry = MULTIMODAL_REGISTRY,
         use_cached_outputs: bool = False,
-        log_requests: bool = True,
+        log_requests: bool = False,
         start_engine_loop: bool = True,
     ) -> None:
         if not envs.VLLM_USE_V1:
@@ -224,8 +224,8 @@ class AsyncLLM(EngineClient):
         # Add the EngineCoreRequest to EngineCore (separate process).
         await self.engine_core.add_request_async(request)
 
-        if self.log_requests:
-            logger.info("Added request %s.", request.request_id)
+        # if self.log_requests:
+        #     logger.info("Added request %s.", request.request_id)
 
     # TODO: we should support multiple prompts in one call, as you
     # can do with LLM.generate. So that for multi-prompt completion

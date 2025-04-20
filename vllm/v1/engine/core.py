@@ -218,7 +218,6 @@ class EngineCore:
             self.request_idx = 0
             self.request_idx_dict.clear()
             self.request_lora_id_dict.clear()
-            self.lora_model_rank_dict.clear()
             self.request_ttft_dict.clear()
             self.request_compute_ttft_dict.clear()
             self.request_latency_dict.clear()
@@ -229,9 +228,6 @@ class EngineCore:
             self.total_num_scheduled_tokens = 0
 
         if self.request_idx_dict.get(req.request_id) is None and not self.scheduler.get_is_warmup():
-            if self.request_idx == 0:
-                # First request, set the first arrival time
-                self.first_req_arrival_time = time.perf_counter_ns()
             # If this is a new request, add it to the request index
             self.request_arrival_time_dict[req.request_id] = req.sampling_params.arrival_time
             self.request_idx_dict[req.request_id] = self.request_idx
@@ -245,6 +241,11 @@ class EngineCore:
             if req.lora_request is not None:
                 self.update_loras_ranks()
 
+            with open(self.log_path, 'a') as log_file:
+                message = f"arrived request id: {self.request_idx - 1}"
+                print(message)
+                log_file.write(message + '\n')
+
     def abort_requests(self, request_ids: list[str]):
         """Abort requests from the scheduler."""
 
@@ -256,6 +257,12 @@ class EngineCore:
 
     def step(self) -> EngineCoreOutputs:
         """Schedule, execute, and make output."""
+        if not self.scheduler.get_is_warmup():
+            with open(self.log_path, 'a') as log_file:
+                message = f"iteration begin, token budget: {self.scheduler.get_token_budget()}, max num seqs: {self.scheduler.get_max_num_seqs()}\ncomputing ..."
+                print("\n\033[93m" + message + "\033[0m")
+                log_file.write('\n' + message + '\n')
+
         # Check for any requests remaining in the scheduler - unfinished,
         # or finished and not yet removed from the batch.
         iteration_start_time = time.perf_counter_ns()
@@ -276,8 +283,9 @@ class EngineCore:
                 self.total_num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
                 if self.total_num_scheduled_tokens:
                     # new iteration info
-                    message = f"new iteration, token budget: {self.scheduler.get_token_budget()}, total scheduled tokens: {self.total_num_scheduled_tokens}, max num seqs: {self.scheduler.get_max_num_seqs()}"
-                    print("\n\033[93m" + message + "\033[0m")
+                    total_scheduled_requests = len(scheduler_output.scheduled_cached_reqs) + len(scheduler_output.scheduled_new_reqs)
+                    message = f"iteration end, total scheduled tokens: {self.total_num_scheduled_tokens}, total scheduled requests: {total_scheduled_requests}"
+                    print("\033[93m" + message + "\033[0m")
                     log_file.write('\n' + message + '\n')
                     
                     scheduled_req_list = []
