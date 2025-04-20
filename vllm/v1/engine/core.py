@@ -266,13 +266,20 @@ class EngineCore:
                 scheduler_stats=self.scheduler.make_stats(),
             )
         
-        if not self.scheduler.get_is_warmup():
+        if not self.scheduler.get_is_warmup() and self.scheduler.has_requests():
             with open(self.log_path, 'a') as log_file:
-                message = f"iteration begin, token budget: {self.scheduler.get_token_budget()}, max num seqs: {self.scheduler.get_max_num_seqs()}\ncomputing ..."
+                message = f"iteration begin, token budget: {self.scheduler.get_token_budget()}, max num seqs: {self.scheduler.get_max_num_seqs()}"
                 print("\n\033[93m" + message + "\033[0m")
                 log_file.write('\n' + message + '\n')
         
         scheduler_output = self.scheduler.schedule()
+
+        if not self.scheduler.get_is_warmup() and self.scheduler.has_requests():
+            with open(self.log_path, 'a') as log_file:
+                message = f"computing ..."
+                print("\033[93m" + message + "\033[0m")
+                log_file.write(message + '\n')
+
         output = self.model_executor.execute_model(scheduler_output)
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, output)  # type: ignore
@@ -287,7 +294,7 @@ class EngineCore:
                     total_scheduled_requests = len(scheduler_output.scheduled_cached_reqs) + len(scheduler_output.scheduled_new_reqs)
                     message = f"iteration end, total scheduled tokens: {self.total_num_scheduled_tokens}, total scheduled requests: {total_scheduled_requests}"
                     print("\033[93m" + message + "\033[0m")
-                    log_file.write('\n' + message + '\n')
+                    log_file.write(message + '\n')
                     
                     scheduled_req_list = []
                     # cached request info
