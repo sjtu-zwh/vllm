@@ -130,6 +130,7 @@ class EngineCore:
         self.request_idx_dict: OrderedDict[str, int] = OrderedDict()
         self.request_lora_id_dict: OrderedDict[str, int] = OrderedDict()
         self.request_ttft_dict: OrderedDict[str, float] = OrderedDict()
+        self.request_compute_ttft_dict: OrderedDict[str, float] = OrderedDict()
         self.request_latency_dict: OrderedDict[str, float] = OrderedDict()
         self.request_osl_dict: OrderedDict[str, int] = OrderedDict() # output seq length
         self.request_arrival_time_dict: OrderedDict[str, float] = OrderedDict()
@@ -215,8 +216,10 @@ class EngineCore:
             self.request_lora_id_dict.clear()
             self.lora_model_rank_dict.clear()
             self.request_ttft_dict.clear()
+            self.request_compute_ttft_dict.clear()
             self.request_latency_dict.clear()
             self.request_osl_dict.clear()
+            self.request_arrival_time_dict.clear()
             self.iter_end_time = 0
             self.first_req_arrival_time = 0
             self.total_num_scheduled_tokens = 0
@@ -226,10 +229,11 @@ class EngineCore:
                 # First request, set the first arrival time
                 self.first_req_arrival_time = time.perf_counter_ns()
             # If this is a new request, add it to the request index
-            self.request_arrival_time_dict[req.request_id] = time.perf_counter_ns()
+            self.request_arrival_time_dict[req.request_id] = req.sampling_params.arrival_time
             self.request_idx_dict[req.request_id] = self.request_idx
             self.request_lora_id_dict[req.request_id] = req.lora_request.lora_int_id if req.lora_request is not None else 0
             self.request_ttft_dict[req.request_id] = 0
+            self.request_compute_ttft_dict[req.request_id] = 0
             self.request_latency_dict[req.request_id] = 0
             self.request_osl_dict[req.request_id] = 0
 
@@ -297,7 +301,7 @@ class EngineCore:
 
                     # iteration time
                     if self.total_num_scheduled_tokens:
-                        iter_time = float(time.perf_counter_ns() - iteration_start_time)/1e6 + 1
+                        iter_time = float(time.perf_counter_ns() - iteration_start_time)/1e6
                         message = f"iter computing time: {iter_time} ms"
                         print(message)
                         log_file.write(message + '\n')
@@ -308,6 +312,7 @@ class EngineCore:
                             if req is not None:
                                 self.request_osl_dict[req_id] = req.num_output_tokens
                                 if self.request_osl_dict[req_id] <= 1:
+                                    self.request_compute_ttft_dict[req_id] += iter_time
                                     if self.request_ttft_dict[req_id] == 0:
                                         self.request_ttft_dict[req_id] += float(time.perf_counter_ns() - self.request_arrival_time_dict[req_id])/1e6
                                     else:
@@ -315,6 +320,7 @@ class EngineCore:
                             else:
                                 self.request_osl_dict[req_id] += 1
                                 if self.request_osl_dict[req_id] == 1:
+                                    self.request_compute_ttft_dict[req_id] += iter_time
                                     if self.request_ttft_dict[req_id] == 0:
                                         self.request_ttft_dict[req_id] += float(time.perf_counter_ns() - self.request_arrival_time_dict[req_id])/1e6
                                     else:
@@ -322,11 +328,12 @@ class EngineCore:
 
                                 request_idx = self.request_idx_dict[req_id]
                                 ttft = self.request_ttft_dict[req_id]
+                                compute_ttft = self.request_compute_ttft_dict[req_id]
                                 latency = self.request_latency_dict[req_id]
                                 osl = self.request_osl_dict[req_id]
                                 tpot = (latency - ttft)/(osl - 1)
 
-                                message = f"request id: {request_idx}, ttft: {ttft}, tpot: {tpot}"
+                                message = f"request id: {request_idx}, ttft: {ttft}, compute ttft: {compute_ttft}, tpot: {tpot}"
                                 print(message)
                                 log_file.write(message + '\n')
 

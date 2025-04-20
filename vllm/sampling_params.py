@@ -240,6 +240,7 @@ class SamplingParams(
     max_num_seqs: int = 0
     max_num_batched_tokens: int = 0
     is_warmup: bool = False
+    arrival_time: Optional[float] = 0
 
     @staticmethod
     def from_optional(
@@ -276,6 +277,7 @@ class SamplingParams(
         max_num_batched_tokens: int = -1,
         is_warmup: bool = False,
         max_num_seqs: int = -1,
+        arrival_time: Optional[float] = 0
     ) -> "SamplingParams":
         if logit_bias is not None:
             # Convert token_id to integer
@@ -321,6 +323,7 @@ class SamplingParams(
             max_num_batched_tokens=max_num_batched_tokens,
             is_warmup = is_warmup,
             max_num_seqs=max_num_seqs,
+            arrival_time=arrival_time,
         )
 
     def __post_init__(self) -> None:

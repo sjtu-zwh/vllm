@@ -264,6 +264,7 @@ class ChatCompletionRequest(OpenAIBaseModel):
     max_num_batched_tokens: Optional[int] = 0
     is_warmup: bool = False
     max_num_seqs: Optional[int] = 0
+    arrival_time: Optional[float] = 0
     # doc: end-chat-completion-sampling-params
 
     # doc: begin-chat-completion-extra-params
@@ -522,7 +523,8 @@ class ChatCompletionRequest(OpenAIBaseModel):
             logit_bias=self.logit_bias,
             max_num_batched_tokens=self.max_num_batched_tokens,
             is_warmup = self.is_warmup,
-            max_num_seqs=self.max_num_seqs)
+            max_num_seqs=self.max_num_seqs,
+            arrival_time=self.arrival_time,)
 
     def _get_guided_json_from_tool(
             self) -> Optional[Union[str, dict, BaseModel]]:
@@ -744,6 +746,7 @@ class CompletionRequest(OpenAIBaseModel):
     max_num_batched_tokens: Optional[int] = 0
     is_warmup: bool = False
     max_num_seqs: Optional[int] = 0
+    arrival_time: Optional[float] = 0
     # doc: end-completion-sampling-params
 
     # doc: begin-completion-extra-params
@@ -946,7 +949,8 @@ class CompletionRequest(OpenAIBaseModel):
             allowed_token_ids=self.allowed_token_ids,
             max_num_batched_tokens=self.max_num_batched_tokens,
             is_warmup=self.is_warmup,
-            max_num_seqs=self.max_num_seqs,)
+            max_num_seqs=self.max_num_seqs,
+            arrival_time=self.arrival_time,)
 
     @model_validator(mode="before")
     @classmethod

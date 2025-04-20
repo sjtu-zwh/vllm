@@ -270,6 +270,7 @@ async def async_request_openai_completions(
             "max_num_batched_tokens": request_func_input.max_num_batched_tokens,
             "is_warmup": request_func_input.is_warmup,
             "max_num_seqs": request_func_input.max_num_seqs,
+            "arrival_time": time.perf_counter_ns(),
         }
         if request_func_input.ignore_eos:
             payload["ignore_eos"] = request_func_input.ignore_eos
