@@ -236,7 +236,7 @@ class Trace:
     def replay_to_workload(self, num_lora_models: int, num_reqs: int, arrival_distribution: str="gamma", 
                            interval_minutes: int=5, tot_rate: float = 4.0, cv: float = 1.0, map_stride: int = 1) -> List[Tuple[int, float]]:
         
-        num_reqs = min(num_reqs, self.num_req)
+        # num_reqs = min(num_reqs, self.num_req)
         model_mapping = self.map_model(num_lora_models, self.function_names, map_stride)
         model_histogram: Dict[int, np.array] = {}
         model_arrivals: Dict[int, np.array] = {}

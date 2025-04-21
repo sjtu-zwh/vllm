@@ -380,6 +380,7 @@ class ShareGPTDataset(BenchmarkDataset):
         **kwargs,
     ) -> list:
         samples: list = []
+        prompt_lens = []
         for entry in self.data:
             if len(samples) >= num_requests:
                 break
@@ -393,6 +394,10 @@ class ShareGPTDataset(BenchmarkDataset):
             prompt_ids = tokenizer(prompt).input_ids
             completion_ids = tokenizer(completion).input_ids
             prompt_len = len(prompt_ids)
+            # if prompt_len < 200:
+            #     # Skip short prompts
+            #     continue
+            prompt_lens.append(prompt_len)
             new_output_len = (len(completion_ids)
                               if output_len is None else output_len)
             if not is_valid_sequence(prompt_len,
@@ -411,6 +416,7 @@ class ShareGPTDataset(BenchmarkDataset):
                     lora_request=lora_request,
                 ))
         self.maybe_oversample_requests(samples, num_requests)
+        print("average prompt length:", np.mean(prompt_lens))
         return samples
 
 

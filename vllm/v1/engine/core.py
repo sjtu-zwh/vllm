@@ -125,11 +125,7 @@ class EngineCore:
                         self.batch_queue_size)
             self.batch_queue = queue.Queue(self.batch_queue_size)
 
-        # 记录迭代的结束时间
-        self.iter_end_time = 0
         self.total_num_scheduled_tokens = 0
-        self.first_req_arrival_time = 0
-
         self.request_idx = 0
         self.request_idx_dict: OrderedDict[str, int] = OrderedDict()
         self.request_lora_id_dict: OrderedDict[str, int] = OrderedDict()
@@ -223,8 +219,6 @@ class EngineCore:
             self.request_latency_dict.clear()
             self.request_osl_dict.clear()
             self.request_arrival_time_dict.clear()
-            self.iter_end_time = 0
-            self.first_req_arrival_time = 0
             self.total_num_scheduled_tokens = 0
 
         if self.request_idx_dict.get(req.request_id) is None and not self.scheduler.get_is_warmup():
@@ -240,11 +234,6 @@ class EngineCore:
             self.request_idx += 1
             if req.lora_request is not None:
                 self.update_loras_ranks()
-
-            with open(self.log_path, 'a') as log_file:
-                message = f"arrived request id: {self.request_idx - 1}"
-                print(message)
-                log_file.write(message + '\n')
 
     def abort_requests(self, request_ids: list[str]):
         """Abort requests from the scheduler."""
@@ -274,8 +263,37 @@ class EngineCore:
         
         scheduler_output = self.scheduler.schedule()
 
+        scheduled_req_list = []
         if not self.scheduler.get_is_warmup() and self.scheduler.has_requests():
             with open(self.log_path, 'a') as log_file:
+                # new iteration info
+                self.total_num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
+                total_scheduled_requests = len(scheduler_output.scheduled_cached_reqs) + len(scheduler_output.scheduled_new_reqs)
+                message = f"scheduler info: total scheduled tokens: {self.total_num_scheduled_tokens}, total scheduled requests: {total_scheduled_requests}"
+                print("\033[93m" + message + "\033[0m")
+                log_file.write(message + '\n')
+                
+                # cached request info
+                for req in scheduler_output.scheduled_cached_reqs:
+                    scheduled_req_list.append(req.req_id)
+                    cached_req_idx = self.request_idx_dict[req.req_id]
+                    cached_req_lora_id = self.request_lora_id_dict[req.req_id]
+                    cached_req_lora_rank = self.lora_model_rank_dict[cached_req_lora_id]
+                    cached_req_scheduled_tokens = scheduler_output.num_scheduled_tokens[req.req_id]
+                    message = f"cached request id: {cached_req_idx}, scheduled tokens: {cached_req_scheduled_tokens}, lora id: {cached_req_lora_id}, lora rank: {cached_req_lora_rank}"
+                    print(message)
+                    log_file.write(message + '\n')
+
+                # new request info
+                for req in scheduler_output.scheduled_new_reqs:
+                    scheduled_req_list.append(req.req_id)
+                    new_req_idx = self.request_idx_dict[req.req_id]
+                    new_req_lora_id = self.request_lora_id_dict[req.req_id]
+                    new_req_lora_rank = self.lora_model_rank_dict[new_req_lora_id]
+                    new_req_scheduled_tokens = scheduler_output.num_scheduled_tokens[req.req_id]
+                    message = f"new request id: {new_req_idx}, scheduled tokens: {new_req_scheduled_tokens}, lora id: {new_req_lora_id}, lora rank: {new_req_lora_rank}"
+                    print(message)
+                    log_file.write(message + '\n')
                 message = f"computing ..."
                 print("\033[93m" + message + "\033[0m")
                 log_file.write(message + '\n')
@@ -283,84 +301,52 @@ class EngineCore:
         output = self.model_executor.execute_model(scheduler_output)
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, output)  # type: ignore
-        
+
         # If the scheduler is not in warmup mode, we need to log the stats
         # and update the request ttft, latency, and output seq length
-        if not self.scheduler.get_is_warmup():
+        if not self.scheduler.get_is_warmup() and len(scheduled_req_list) > 0:
             with open(self.log_path, 'a') as log_file:
-                self.total_num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
-                if self.total_num_scheduled_tokens:
-                    # new iteration info
-                    total_scheduled_requests = len(scheduler_output.scheduled_cached_reqs) + len(scheduler_output.scheduled_new_reqs)
-                    message = f"iteration end, total scheduled tokens: {self.total_num_scheduled_tokens}, total scheduled requests: {total_scheduled_requests}"
-                    print("\033[93m" + message + "\033[0m")
-                    log_file.write(message + '\n')
-                    
-                    scheduled_req_list = []
-                    # cached request info
-                    for req in scheduler_output.scheduled_cached_reqs:
-                        scheduled_req_list.append(req.req_id)
-                        cached_req_idx = self.request_idx_dict[req.req_id]
-                        cached_req_lora_id = self.request_lora_id_dict[req.req_id]
-                        cached_req_lora_rank = self.lora_model_rank_dict[cached_req_lora_id]
-                        cached_req_scheduled_tokens = scheduler_output.num_scheduled_tokens[req.req_id]
-                        message = f"cached request id: {cached_req_idx}, scheduled tokens: {cached_req_scheduled_tokens}, lora id: {cached_req_lora_id}, lora rank: {cached_req_lora_rank}"
-                        print(message)
-                        log_file.write(message + '\n')
-
-                    # new request info
-                    for req in scheduler_output.scheduled_new_reqs:
-                        scheduled_req_list.append(req.req_id)
-                        new_req_idx = self.request_idx_dict[req.req_id]
-                        new_req_lora_id = self.request_lora_id_dict[req.req_id]
-                        new_req_lora_rank = self.lora_model_rank_dict[new_req_lora_id]
-                        new_req_scheduled_tokens = scheduler_output.num_scheduled_tokens[req.req_id]
-                        message = f"new request id: {new_req_idx}, scheduled tokens: {new_req_scheduled_tokens}, lora id: {new_req_lora_id}, lora rank: {new_req_lora_rank}"
-                        print(message)
-                        log_file.write(message + '\n')
-
-                    # iteration time
-                    if self.total_num_scheduled_tokens:
-                        iter_time = float(time.perf_counter_ns() - iteration_start_time)/1e6
-                        message = f"iter computing time: {iter_time} ms"
-                        print(message)
-                        log_file.write(message + '\n')
-                        
-                        for req_id in scheduled_req_list:
-                            req = self.scheduler.get_request(req_id)
-                            req_arrival_time = self.request_arrival_time_dict[req_id]
-                            self.request_latency_dict[req_id] += iter_time
-                            if req is not None:
-                                self.request_osl_dict[req_id] = req.num_output_tokens
-                                if self.request_osl_dict[req_id] <= 1:
-                                    self.request_compute_ttft_dict[req_id] += iter_time
-                                    if self.request_ttft_dict[req_id] == 0:
-                                        first_iter_time = float(time.perf_counter_ns() - req_arrival_time)/1e6
-                                        self.request_ttft_dict[req_id] += first_iter_time
-                                    else:
-                                        self.request_ttft_dict[req_id] += iter_time
+                # iteration time
+                iter_time = float(time.perf_counter_ns() - iteration_start_time)/1e6
+                message = f"iteration computing time: {iter_time} ms"
+                print(message)
+                log_file.write(message + '\n')
+                
+                for req_id in scheduled_req_list:
+                    req = self.scheduler.get_request(req_id)
+                    req_arrival_time = self.request_arrival_time_dict[req_id]
+                    self.request_latency_dict[req_id] += iter_time
+                    if req is not None:
+                        self.request_osl_dict[req_id] = req.num_output_tokens
+                        if self.request_osl_dict[req_id] <= 1:
+                            self.request_compute_ttft_dict[req_id] += iter_time
+                            if self.request_ttft_dict[req_id] == 0:
+                                first_iter_time = float(time.perf_counter_ns() - req_arrival_time)/1e6
+                                self.request_ttft_dict[req_id] += first_iter_time
                             else:
-                                self.request_osl_dict[req_id] += 1
-                                if self.request_osl_dict[req_id] == 1:
-                                    self.request_compute_ttft_dict[req_id] += iter_time
-                                    if self.request_ttft_dict[req_id] == 0:
-                                        first_iter_time = float(time.perf_counter_ns() - req_arrival_time)/1e6
-                                        self.request_ttft_dict[req_id] += first_iter_time
-                                    else:
-                                        self.request_ttft_dict[req_id] += iter_time
+                                self.request_ttft_dict[req_id] += iter_time
+                    else:
+                        self.request_osl_dict[req_id] += 1
+                        if self.request_osl_dict[req_id] == 1:
+                            self.request_compute_ttft_dict[req_id] += iter_time
+                            if self.request_ttft_dict[req_id] == 0:
+                                first_iter_time = float(time.perf_counter_ns() - req_arrival_time)/1e6
+                                self.request_ttft_dict[req_id] += first_iter_time
+                            else:
+                                self.request_ttft_dict[req_id] += iter_time
 
-                                request_idx = self.request_idx_dict[req_id]
-                                ttft = self.request_ttft_dict[req_id] + OUTPUT_PROCESSING_TIME
-                                compute_ttft = self.request_compute_ttft_dict[req_id] + INPUT_PROCESSING_TIME + OUTPUT_PROCESSING_TIME
-                                latency = self.request_latency_dict[req_id]
-                                osl = self.request_osl_dict[req_id]
-                                tpot = (latency - compute_ttft)/(osl - 1) + DECODE_PROCESSING_TIME
-                                queue_time = max(ttft - compute_ttft, 0)
+                        request_idx = self.request_idx_dict[req_id]
+                        ttft = self.request_ttft_dict[req_id] + OUTPUT_PROCESSING_TIME
+                        compute_ttft = self.request_compute_ttft_dict[req_id] + INPUT_PROCESSING_TIME + OUTPUT_PROCESSING_TIME
+                        latency = self.request_latency_dict[req_id]
+                        osl = self.request_osl_dict[req_id]
+                        tpot = (latency - compute_ttft)/(osl - 1) + DECODE_PROCESSING_TIME
+                        queue_time = max(ttft - compute_ttft, 0)
 
-                                message = f"request id: {request_idx}, ttft: {ttft}, compute ttft: {compute_ttft}, queue time: {queue_time}, tpot: {tpot}"
-                                print(message)
-                                log_file.write(message + '\n')
-
+                        message = f"request id: {request_idx}, ttft: {ttft}, compute ttft: {compute_ttft}, queue time: {queue_time}, tpot: {tpot}"
+                        print(message)
+                        log_file.write(message + '\n')
+        
         return engine_core_outputs
 
     def step_with_batch_queue(self) -> Optional[EngineCoreOutputs]:

@@ -275,9 +275,9 @@ async def benchmark_from_lora_workload(
 
     print("Starting warmup...")
 
-    pbar_warmup = None if disable_tqdm else tqdm(total=len(input_requests))
+    pbar_warmup = None if disable_tqdm else tqdm(total=len(input_requests[-10:]))
     tasks: list[asyncio.Task] = []
-    async for lora_model_id, request in get_request_from_workload(input_requests, workload):
+    async for lora_model_id, request in get_request_from_workload(input_requests[-10:], workload):
         prompt, prompt_len, output_len, mm_content = request.prompt, \
             request.prompt_len, request.expected_output_len, \
                 request.multi_modal_data
@@ -332,11 +332,11 @@ async def benchmark_from_lora_workload(
     print(f"Burstiness factor: {args.cv} ({distribution})")
     print(f"Maximum request concurrency: {max_concurrency}")
 
-    pbar = None if disable_tqdm else tqdm(total=len(input_requests))
+    pbar = None if disable_tqdm else tqdm(total=len(input_requests[:-10]))
 
     benchmark_start_time = time.perf_counter()
     tasks: list[asyncio.Task] = []
-    async for lora_model_id, request in get_request_from_workload(input_requests, workload):
+    async for lora_model_id, request in get_request_from_workload(input_requests[:-10], workload):
         prompt, prompt_len, output_len, mm_content = request.prompt, \
             request.prompt_len, request.expected_output_len, \
                 request.multi_modal_data
@@ -557,7 +557,7 @@ def main(args: argparse.Namespace):
     num_models = num_lora_models if num_lora_models > 0 else 1
     maf_trace = Trace(args.trace_name, args.trace_path, args.start_time, args.end_time, args.need_sort)
     workload = maf_trace.replay_to_workload(num_models, args.num_prompts, tot_rate=args.request_rate, cv=args.cv, interval_minutes=args.interval, map_stride=args.map_stride)
-    num_prompts = len(workload)
+    num_prompts = len(workload) + 10
     print(f"Total number of prompts: {num_prompts}")
 
     if args.dataset_name is None:
