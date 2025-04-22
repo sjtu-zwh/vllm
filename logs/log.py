@@ -45,18 +45,19 @@ def parse_log_file(log_file_path):
         result = {
             'Iteration': iter_num,
             'Rank 4 Requests': rank_request_counts.get(4, 0),
-            'Rank 4 Tokens': rank_token_counts.get(4, 0),
+            '4': rank_token_counts.get(4, 0),
             'Rank 8 Requests': rank_request_counts.get(8, 0),
-            'Rank 8 Tokens': rank_token_counts.get(8, 0),
+            '8': rank_token_counts.get(8, 0),
             'Rank 16 Requests': rank_request_counts.get(16, 0),
-            'Rank 16 Tokens': rank_token_counts.get(16, 0),
+            '16': rank_token_counts.get(16, 0),
             'Rank 32 Requests': rank_request_counts.get(32, 0),
-            'Rank 32 Tokens': rank_token_counts.get(32, 0),
+            '32': rank_token_counts.get(32, 0),
             'Total Requests': sum(rank_request_counts.values()),
             'Total Tokens': sum(rank_token_counts.values()),
             'Computing Time (ms)': computing_time
         }
-        results.append(result)
+        if sum(rank_token_counts.values()) != 0:
+            results.append(result)
     
     return results
 
@@ -65,10 +66,10 @@ def save_to_csv(results, output_file):
     
     # Reorder columns for better readability
     columns = ['Iteration',
-               'Rank 4 Tokens',
-               'Rank 8 Tokens', 
-               'Rank 16 Tokens', 
-               'Rank 32 Tokens', 
+               '4',
+               '8', 
+               '16', 
+               '32', 
                'Total Tokens',
                'Computing Time (ms)']
     
@@ -77,8 +78,8 @@ def save_to_csv(results, output_file):
     print(f"Results saved to {output_file}")
 
 # Example usage
-log_file_path = '/home/whzhang/workspace/LLM/vllm/logs/20250421_203806.log' # Replace with your log file path
-output_csv = 'iteration_stats2.csv'
+log_file_path = '/home/whzhang/workspace/LLM/vllm/logs/20250422_133107.log' # Replace with your log file path
+output_csv = 'iteration_stats3.csv'
 
 results = parse_log_file(log_file_path)
 save_to_csv(results, output_csv)
