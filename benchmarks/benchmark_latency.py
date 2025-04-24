@@ -8,6 +8,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any, Optional
+from vllm.lora.request import LoRARequest
 
 import numpy as np
 import torch
@@ -62,11 +63,28 @@ def main(args: argparse.Namespace):
         "prompt_token_ids": batch
     } for batch in dummy_prompt_token_ids.tolist()]
 
-    def llm_generate():
+    if args.lora_modules:
+        lora_modules = ["lora0"]
+        lora_paths = ["Nutanix/Meta-Llama-3-8B-Instruct_lora_8_alpha_16"]
+        random_lora_ids = np.random.randint(0, len(args.lora_modules),
+                                           size=args.batch_size)
+        lora_requests: list[LoRARequest] = [
+            LoRARequest(lora_modules[i], random_lora_ids[i]+1, lora_paths[i])
+            for i in random_lora_ids
+        ]
+
+    def llm_generate(is_warmup: bool=True):
+        sampling_params.is_warmup = is_warmup
         if not args.use_beam_search:
-            llm.generate(dummy_prompts,
-                         sampling_params=sampling_params,
-                         use_tqdm=False)
+            if args.lora_modules:
+                llm.generate(dummy_prompts,
+                             sampling_params=sampling_params,
+                             lora_request=lora_requests,
+                             use_tqdm=False)
+            else:
+                llm.generate(dummy_prompts,
+                            sampling_params=sampling_params,
+                            use_tqdm=False)
         else:
             llm.beam_search(
                 dummy_prompts,
@@ -77,7 +95,7 @@ def main(args: argparse.Namespace):
                 ),
             )
 
-    def run_to_completion(profile_dir: Optional[str] = None):
+    def run_to_completion(profile_dir: Optional[str] = None, is_warmup: bool=True):
         if profile_dir:
             with torch.profiler.profile(
                     activities=[
@@ -87,32 +105,36 @@ def main(args: argparse.Namespace):
                     on_trace_ready=torch.profiler.tensorboard_trace_handler(
                         str(profile_dir)),
             ) as p:
-                llm_generate()
+                llm_generate(is_warmup=is_warmup)
             print(p.key_averages().table(sort_by="self_cuda_time_total"))
         else:
             start_time = time.perf_counter()
-            llm_generate()
+            llm_generate(is_warmup=is_warmup)
             end_time = time.perf_counter()
             latency = end_time - start_time
             return latency
 
     print("Warming up...")
     for _ in tqdm(range(args.num_iters_warmup), desc="Warmup iterations"):
-        run_to_completion(profile_dir=None)
+        run_to_completion(profile_dir=None, is_warmup=True)
 
-    if args.profile:
-        profile_dir = args.profile_result_dir
-        if not profile_dir:
-            profile_dir = (Path(".") / "vllm_benchmark_result" /
-                           f"latency_result_{time.time()}")
-        print(f"Profiling (results will be saved to '{profile_dir}')...")
-        run_to_completion(profile_dir=profile_dir)
-        return
+    # if args.profile:
+    #     profile_dir = args.profile_result_dir
+    #     if not profile_dir:
+    #         profile_dir = (Path(".") / "vllm_benchmark_result" /
+    #                        f"latency_result_{time.time()}")
+    #     print(f"Profiling (results will be saved to '{profile_dir}')...")
+    #     run_to_completion(profile_dir=profile_dir, is_warmup=True)
+    #     return
 
-    # Benchmark.
+    # Benchmark for no lora.        
     latencies = []
-    for _ in tqdm(range(args.num_iters), desc="Profiling iterations"):
-        latencies.append(run_to_completion(profile_dir=None))
+    # for _ in tqdm(range(args.num_iters), desc="Profiling iterations"):
+    #     latencies.append(run_to_completion(profile_dir=None, is_warmup=False))
+    # Benchmark for lora.
+    if args.lora_modules:
+        for _ in tqdm(range(args.num_iters), desc="Profiling iterations"):
+            latencies.append(run_to_completion(profile_dir=None, is_warmup=False))
     latencies = np.array(latencies)
     percentages = [10, 25, 50, 75, 90, 99]
     percentiles = np.percentile(latencies, percentages)
@@ -179,6 +201,14 @@ if __name__ == "__main__":
         action="store_true",
         help=("Do not detokenize responses (i.e. do not include "
               "detokenization time in the latency measurement)"),
+    )
+    parser.add_argument(
+        "--lora-modules",
+        nargs='+',
+        default=None,
+        help="A subset of LoRA module names passed in when "
+        "launching the server. For each request, the "
+        "script chooses a LoRA module at random.",
     )
 
     parser = EngineArgs.add_cli_args(parser)

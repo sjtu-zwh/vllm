@@ -261,7 +261,8 @@ class EngineCore:
                 print("\n\033[93m" + message + "\033[0m")
                 log_file.write('\n' + message + '\n')
         
-        scheduler_output = self.scheduler.schedule()
+        # scheduler_output = self.scheduler.schedule()
+        scheduler_output = self.scheduler.schedule_no_chunked_prefill()
 
         scheduled_req_list = []
         if not self.scheduler.get_is_warmup() and self.scheduler.has_requests():

@@ -291,9 +291,9 @@ async def benchmark(
     
     if lora_modules:
         # For each input request, choose a LoRA module at random.
-        lora_modules = iter(
+        lora_modules_iter = iter(
             [random.choice(lora_modules) \
-                for _ in range(len(input_requests))])
+                for _ in range(len(input_requests)+10)])
 
     print("Starting initial single prompt test run...")
     test_prompt, test_prompt_len, test_output_len, test_mm_content = \
@@ -326,7 +326,7 @@ async def benchmark(
                 request.multi_modal_data
         req_model_id, req_model_name = model_id, model_name
         if lora_modules:
-            req_lora_module = next(lora_modules)
+            req_lora_module = next(lora_modules_iter)
             req_model_id, req_model_name = req_lora_module, req_lora_module
 
         request_func_input = RequestFuncInput(model=req_model_id,
@@ -338,9 +338,7 @@ async def benchmark(
                                               logprobs=logprobs,
                                               multi_modal_content=mm_content,
                                               ignore_eos=ignore_eos,
-                                              is_warmup=True,
-                                              max_num_batched_tokens=args.chunk_size,
-                                              max_num_seqs=args.max_batch_size)
+                                              is_warmup=True)
         tasks.append(
             asyncio.create_task(
                 request_func(request_func_input=request_func_input,
@@ -362,9 +360,7 @@ async def benchmark(
                                          logprobs=logprobs,
                                          multi_modal_content=test_mm_content,
                                          ignore_eos=ignore_eos,
-                                         is_warmup=True,
-                                         max_num_batched_tokens=args.chunk_size,
-                                         max_num_seqs=args.max_batch_size)
+                                         is_warmup=True)
         profile_output = await request_func(request_func_input=profile_input)
         if profile_output.success:
             print("Profiler started")
@@ -392,7 +388,7 @@ async def benchmark(
                 request.multi_modal_data
         req_model_id, req_model_name = model_id, model_name
         if lora_modules:
-            req_lora_module = next(lora_modules)
+            req_lora_module = next(lora_modules_iter)
             req_model_id, req_model_name = req_lora_module, req_lora_module
             lora_model_list[req_model_id] += 1
 

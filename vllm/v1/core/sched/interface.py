@@ -38,6 +38,17 @@ class SchedulerInterface(ABC):
             requests.
         """
         raise NotImplementedError
+    
+    @abstractmethod
+    def schedule_no_chunked_prefill(self) -> "SchedulerOutput":
+        """Schedule the requests to process in this scheduling step without
+        chunked prefill.
+
+        This method is called when the scheduler is not using chunked prefill.
+        It is similar to the schedule() method, but it does not use chunked
+        prefill.
+        """
+        raise NotImplementedError
 
     @abstractmethod
     def update_from_output(
