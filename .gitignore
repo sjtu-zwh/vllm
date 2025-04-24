@@ -181,6 +181,12 @@ cython_debug/
 
 # Results
 *.csv
+*.png
+
+# Ignore vllm_profile directory with large trace files
+/vllm_profile/
+# Specifically ignore large trace files
+*.pt.trace.json.gz
 
 # Python pickle files
 *.pkl

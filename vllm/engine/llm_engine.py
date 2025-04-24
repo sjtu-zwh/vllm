@@ -3,7 +3,7 @@
 import copy
 import time
 from collections import Counter as collectionsCounter
-from collections import deque
+from collections import deque, OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
@@ -11,6 +11,8 @@ from typing import (TYPE_CHECKING, Any, Callable, ClassVar, Deque, Dict,
                     Iterable, List, Mapping, NamedTuple, Optional)
 from typing import Sequence as GenericSequence
 from typing import Set, Type, Union, cast, overload
+from datetime import datetime
+import os
 
 import torch
 from typing_extensions import TypeVar, deprecated
@@ -422,6 +424,26 @@ class LLMEngine:
         # the next step without re-scheduling.
         self._skip_scheduling_next_step = False
 
+        self.is_warmup = True
+        self.total_num_scheduled_tokens = 0
+        self.request_idx = 0
+        self.request_idx_dict: OrderedDict[str, int] = OrderedDict()
+        self.request_lora_id_dict: OrderedDict[str, int] = OrderedDict()
+        self.request_ttft_dict: OrderedDict[str, float] = OrderedDict()
+        self.request_compute_ttft_dict: OrderedDict[str, float] = OrderedDict()
+        self.request_latency_dict: OrderedDict[str, float] = OrderedDict()
+        self.request_osl_dict: OrderedDict[str, int] = OrderedDict() # output seq length
+        self.request_arrival_time_dict: OrderedDict[str, float] = OrderedDict()
+        self.lora_model_rank_dict: OrderedDict[int, int] = OrderedDict()
+        self.lora_model_rank_dict[0] = 0
+
+        # 生成基于当前时间的唯一文件名
+        self.log_folder = "./logs"
+        now = datetime.now()
+        self.log_filename = now.strftime("%Y%m%d_%H%M%S") + ".log"
+        self.log_path = os.path.join(self.log_folder, self.log_filename)
+        self.log_file = None
+
     def _initialize_kv_caches(self) -> None:
         """Initialize the KV cache in the worker(s).
 
@@ -794,6 +816,37 @@ class LLMEngine:
             trace_headers=trace_headers,
             priority=priority,
         )
+
+        self.is_warmup = params.is_warmup
+
+        if params.is_warmup:
+            now = datetime.now()
+            self.log_filename = now.strftime("%Y%m%d_%H%M%S") + ".log"
+            self.log_path = os.path.join(self.log_folder, self.log_filename)
+            self.request_idx = 0
+            self.request_idx_dict.clear()
+            self.request_lora_id_dict.clear()
+            self.request_ttft_dict.clear()
+            self.request_compute_ttft_dict.clear()
+            self.request_latency_dict.clear()
+            self.request_osl_dict.clear()
+            self.request_arrival_time_dict.clear()
+            self.total_num_scheduled_tokens = 0
+
+        if self.request_idx_dict.get(request_id) is None and not params.is_warmup:
+            # If this is a new request, add it to the request index
+            self.request_arrival_time_dict[request_id] = params.arrival_time
+            self.request_idx_dict[request_id] = self.request_idx
+            self.request_lora_id_dict[request_id] = lora_request.lora_int_id if lora_request is not None else 0
+            self.request_ttft_dict[request_id] = 0
+            self.request_compute_ttft_dict[request_id] = 0
+            self.request_latency_dict[request_id] = 0
+            self.request_osl_dict[request_id] = 0
+
+            self.request_idx += 1
+
+            if lora_request is not None:
+                self.update_loras_ranks()
 
     def _validate_token_prompt(self, prompt: PromptType,
                                tokenizer: AnyTokenizer):
@@ -1339,6 +1392,8 @@ class LLMEngine:
             >>>     if not (engine.has_unfinished_requests() or example_inputs):
             >>>         break
         """
+        iteration_start_time = time.perf_counter_ns()
+
         if self.parallel_config.pipeline_parallel_size > 1:
             raise NotImplementedError(
                 "Pipeline parallelism is only supported through AsyncLLMEngine "
@@ -1368,10 +1423,37 @@ class LLMEngine:
         if not self._has_remaining_steps(
                 seq_group_metadata_list
         ) and not self._skip_scheduling_next_step:
+            
+            if not self.is_warmup:
+                with open(self.log_path, 'a') as log_file:
+                    message = f"iteration begin, max num seqs: {self.scheduler_config.max_num_seqs}"
+                    log_file.write('\n' + message + '\n')
+
             # Schedule iteration
             (seq_group_metadata_list, scheduler_outputs,
              allow_async_output_proc
              ) = self.scheduler[virtual_engine].schedule()
+
+            if not self.is_warmup and not scheduler_outputs.is_empty():
+                with open(self.log_path, 'a') as log_file:
+                    # new iteration info
+                    total_computing_tokens = 0
+                    for seq_group_metadata, scheduled_seq_group in zip(seq_group_metadata_list, scheduler_outputs.scheduled_seq_groups):
+                        request_id = scheduled_seq_group.seq_group.request_id
+                        req_idx = self.request_idx_dict[request_id]
+                        req_lora_id = self.request_lora_id_dict[request_id]
+                        req_lora_rank = self.lora_model_rank_dict[req_lora_id]
+                        req_new_scheduled_tokens = scheduled_seq_group.token_chunk_size
+                    
+                        if seq_group_metadata.is_prompt:
+                            message = f"Prefill req: {req_idx}, lora id: {req_lora_id}, lora rank: {req_lora_rank}, new scheduled token num: {req_new_scheduled_tokens}"
+                            total_computing_tokens += req_new_scheduled_tokens
+                        else:
+                            message = f"Decode req: {req_idx}, lora id: {req_lora_id}, lora rank: {req_lora_rank}, new scheduled token num: {req_new_scheduled_tokens}"
+                            total_computing_tokens += len(scheduled_seq_group.seq_group.prompt_token_ids) + self.request_osl_dict[request_id]
+                        log_file.write(message + '\n')
+                    message = f"scheduler info: total scheduled requests: {len(seq_group_metadata_list)}, total computing tokens: {total_computing_tokens}"
+                    log_file.write(message + '\n')
 
             ctx.seq_group_metadata_list = seq_group_metadata_list
             ctx.scheduler_outputs = scheduler_outputs
@@ -1402,11 +1484,10 @@ class LLMEngine:
         assert scheduler_outputs is not None
 
         if not scheduler_outputs.is_empty():
-
             # Check if we have a cached last_output from the previous iteration.
             # For supporting PP this is probably the best way to pass the
             # sampled_token_ids, as a separate broadcast over all the PP stages
-            # will cause one virtual engine's microbatch to block the pipeline.
+            # will cause one virtual engine's microbatch to block the pipeline. 
             last_sampled_token_ids = \
                 self._get_last_sampled_token_ids(virtual_engine)
 
@@ -1426,6 +1507,8 @@ class LLMEngine:
                 execute_model_req.async_callback = self.async_callbacks[
                     virtual_engine]
 
+            timestamp1 = time.perf_counter_ns()
+
             try:
                 outputs = self.model_executor.execute_model(
                     execute_model_req=execute_model_req)
@@ -1443,6 +1526,12 @@ class LLMEngine:
                     allow_async_output_proc=allow_async_output_proc)
                 # Raise so the caller is notified that this request failed
                 raise
+
+            timestamp2 = time.perf_counter_ns()
+            if not self.is_warmup:
+                with open(self.log_path, 'a') as log_file:
+                    message = f"execute_model time: {float(timestamp2 - timestamp1)/1e6} ms"
+                    log_file.write(message + '\n')
 
             # We need to do this here so that last step's sampled_token_ids can
             # be passed to the next iteration for PP.
@@ -1514,6 +1603,39 @@ class LLMEngine:
             # queued control plane messages, such as add/remove lora adapters.
             logger.debug("Stopping remote worker execution loop.")
             self.model_executor.stop_remote_worker_execution_loop()
+ 
+        # If the scheduler is not in warmup mode, we need to log the stats
+        # and update the request ttft, latency, and output seq length
+        if not self.is_warmup:
+            with open(self.log_path, 'a') as log_file:
+                # iteration time
+                iter_time = float(time.perf_counter_ns() - iteration_start_time)/1e6
+                message = f"iteration computing time: {iter_time} ms"
+                log_file.write(message + '\n')
+                
+                for seq_group in seq_group_metadata_list:
+                    req_id = seq_group.request_id
+                    req_arrival_time = self.request_arrival_time_dict[req_id]
+                    self.request_latency_dict[req_id] += iter_time
+                    self.request_osl_dict[req_id] += 1
+                    if self.request_osl_dict[req_id] == 1:
+                        self.request_compute_ttft_dict[req_id] += iter_time
+                        first_iter_time = float(time.perf_counter_ns() - req_arrival_time)/1e6
+                        self.request_ttft_dict[req_id] += first_iter_time
+                        
+
+                for req in scheduler_outputs.scheduled_seq_groups:
+                    if req.seq_group.is_finished():
+                        req_id = req.seq_group.request_id
+                        request_idx = self.request_idx_dict[req_id]
+                        ttft = self.request_ttft_dict[req_id] 
+                        compute_ttft = self.request_compute_ttft_dict[req_id]
+                        latency = self.request_latency_dict[req_id]
+                        osl = self.request_osl_dict[req_id]
+                        tpot = (latency - compute_ttft)/(osl - 1)
+                        queue_time = max(ttft - compute_ttft, 0)
+                        message = f"request id: {request_idx}, ttft: {ttft}, compute ttft: {compute_ttft}, queue time: {queue_time}, tpot: {tpot}"
+                        log_file.write(message + '\n')
 
         return ctx.request_outputs
 
@@ -1916,6 +2038,10 @@ class LLMEngine:
     
     def list_loras_ranks(self) -> Dict[int, int]:
         return self.model_executor.list_loras_ranks()
+    
+    def update_loras_ranks(self):
+        self.lora_model_rank_dict = self.list_loras_ranks().copy()
+        print(f"lora model rank dict: {self.lora_model_rank_dict}")
 
     def pin_lora(self, lora_id: int) -> bool:
         return self.model_executor.pin_lora(lora_id)
